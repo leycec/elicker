@@ -1,0 +1,584 @@
+#!/usr/bin/env zsh
+# ====================[ elicker                            ]====================
+#
+# --------------------( NAME                               )--------------------
+# elicker - run eLyXer under sane defaults and sanitize output HTML files
+#
+# --------------------( SYNOPSIS                           )--------------------
+# elicker [ELYXER_OPTION]... SOURCE_LYX_DIR SOURCE_LYX_FILE TARGET_HTML_FILE
+#
+# --------------------( USAGE                              )--------------------
+# Change the "Converter" of "LyX -> HTML" of "Tools->Preferences" from:
+#
+#    elyxer --directory $$r $$i $$o
+#
+# ...to:
+#
+#    elicker $$r $$i $$o
+#
+# Due to eLyXer inadequacies, we also recommend passing the following options in
+# the above call to "elicker":
+#
+# * "--title '${title_name}'", where ${title_name} is the desired title for such
+#   document. Sadly, eLyXer defaults such title to "Converted document".
+#
+# --------------------( INSTALLATION                       )--------------------
+# elicker requires the following dependencies:
+#
+# * LyX >= 2.0.0.
+# * eLyXer >= 1.2.5.
+# * zsh >= 5.0.0.
+#
+# --------------------( DESCRIPTION                        )--------------------
+# Convert the passed source LyX file in the passed directory into the passed
+# target HTML file via external Python converter eLyXer passed the passed
+# options. After running eLyXer, elicker sanitizes the produced HTML file.
+
+#FIXME: The "README.md" should explicitly document all of the nifty things we do
+#here. Too many to exhaustively list here, so grep below!
+#FIXME: Is there any tangible difference between the "website" and
+#"ebook-quality-high" end uses? If not, elicker use could probably be simplified
+#by simply providing a single "--quality" option currently accepting only two
+#possible strings "low" and "high" (e.g., "--quality high").
+
+# ....................{ GLOBALS                            }....................
+# Current elicker version.
+typeset -g ELICKER_VERSION='0.0.1'
+
+# Minimum zsh version required by elicker.
+typeset -g ELICKER_ZSH_VERSION_REQUIRED='4.3.0'
+
+# Minimum eLyXer version recommended by elicker.
+typeset -g ELICKER_ELYXER_VERSION_RECOMMENDED='1.2.5'
+
+# elicker help printed when the caller passes option "--help".
+typeset -g ELICKER_HELP='Usage: elicker [OPTIONS]... SOURCE_DIRECTORY SOURCE_LYX_FILE TARGET_HTML_FILE
+
+A sanitary wrapper for eLyXer optimizing output HTML for consumer end use
+(e.g., EPUB2 ebook readers), intended to be run from within LyX by changing the
+"Tools->Preferences->File Handling->Converters" dialog field "Converter:" to:
+
+    elicker --title "My Book Title" $$r $$i $$o
+
+Since neither elicker or eLyXer are capable of automatically copying the title
+from input LyX documents to output HTML files, specify such title as above.
+
+elicker supports all options and arguments supported by eLyXer, as well as
+the following elicker-specific options:
+
+  --end-use END-USE              optimize output HTML for the passed END-USE,
+                                 either "website", "ebook-quality-high", or
+                                 "ebook-quality-low" as follows (defaults to
+                                 "ebook-quality-high"):
+
+    --end-use website              output high-quality XHTML intended for
+                                   publication directly to a website
+    --end-use ebook-quality-high   output high-quality XHTML intended for
+                                   publication as an EPUB3 and/or KF8 ebook
+    --end-use ebook-quality-low    output low-quality XHTML intended for
+                                   publication as an EPUB2 and/or MOBI ebook
+
+eLyXer options and arguments are as follows:
+'
+
+# ....................{ ZSH                                }....................
+# If the current zsh version is less than such version, terminate with failure.
+autoload -U is-at-least
+is-at-least "${ELICKER_ZSH_VERSION_REQUIRED}" || {
+    print "elicker: installed zsh ${ZSH_VERSION} < required zsh ${ELICKER_ZSH_VERSION_REQUIRED}" 1>&2
+    exit 1
+}
+
+# Enforce strictness.
+set -e
+
+# Enable sane shell defaults.
+setopt extended_glob no_unset null_glob rc_quotes rematch_pcre
+
+# Enable exception handling.
+autoload throw catch
+
+# Load core zsh modules.
+zmodload zsh/pcre zsh/parameter
+
+# Print the passed message to standard output.
+function print_message() {
+    print "elicker: ${*}"
+}
+
+# Print the passed message to standard error.
+function print_warning() {
+    print "elicker: ${*}" 1>&2
+}
+
+# Print the passed message to standard error and throw a fatal exception
+# terminating the current script.
+function die() {
+    print_warning "${*}"
+    throw elicker_exception
+}
+
+# Print the passed message preceded by elyxer help to standard error and throw a
+# fatal exception terminating the current script.
+function die_with_help() {
+    print_warning "${*}"$'\n\n'"${ELICKER_HELP}"
+    command elyxer --help 1>&2
+    
+    throw elicker_exception
+}
+
+# ....................{ ELYXER                             }....................
+local elyxer_version
+
+# If eLyXer is *NOT* in the current ${PATH}, fail.
+(( ${+commands[elyxer]} )) || die\
+    '"elyxer" not installed or not in the current ${PATH}.'
+
+# Parse the current eLyXer version from eLyXer standard error (!).
+elyxer_version="$(elyxer --version 2>&1)"
+if [[ "${elyxer_version}" == *(#b)(<->.<->.<->)* ]] {
+    elyxer_version="${match[1]}"
+} else {
+    die "eLyXer version output \"${elyxer_version}\" contains no parseable version.
+Consider installing at least eLyXer ${ELICKER_ELYXER_VERSION_RECOMMENDED}."
+}
+
+# If the current eLyXer version is less than recommended, print a warning.
+is-at-least "${ELICKER_ELYXER_VERSION_RECOMMENDED}" "${elyxer_version}" ||
+    print_warning "elicker: installed elyxer ${elyxer_version} < recommended zsh ${ELICKER_ELYXER_VERSION_RECOMMENDED}"
+
+# ....................{ HELP                               }....................
+# Validate sanity.
+(( # )) || die_with_help 'Expected at least one argument.'
+
+# If the caller passed a help-related argument (e.g., "--help"), pass all such
+# arguments to "elyxer" as is without requiring the caller to have passed
+# filenames as well.
+if (( ${@[(i)--(help|lyxformat|version)]} <= ${#} )) {
+    # If the caller passed option "--version", also print an "elicker" version.
+    if (( ${@[(ie)--version]} <= ${#} )) {
+        print "* elicker version ${ELICKER_VERSION}"
+    }
+
+    # If the caller passed option "--help", also print "elicker" help.
+    if (( ${@[(ie)--help]} <= ${#} )) {
+        print "${ELICKER_HELP}"
+    }
+
+    # By default, "elyxer" prints help output to both standard output and error,
+    # a probable bug preventing such output from being cleanly redirected with a
+    # pager (e.g., "less"). Fix this by redirecting standard error to output.
+    command elyxer "${@}" 2>&1
+
+    # Terminate this script successfully.
+    exit 0
+}
+
+# ....................{ CLI                                }....................
+# If the caller passed fewer than the required number of arguments, print the
+# elicker help to standard error and terminate with failure.
+(( # >= 3 )) || die_with_help\
+    'Expected optional eLyXer options, one absolute base dirname, one absolute or relative source LyX filename, and one absolute or relative target HTML filename.'
+
+local\
+    dirname_src="${@[-3]}"\
+    filename_src_lyx="${@[-2]}"\
+    filename_trg_html="${@[-1]}"\
+    filename_trg_html_old\
+    dirname_trg
+#print 'pwd: '${PWD}'\n$$r: '${dirname_src}'\n$$i: '${filename_src_lyx}'\n$$o: '${filename_trg_html}
+#print "Current arguments: ${*}"
+
+# Pop such filenames from the argument list, leaving only eLyXer options.
+argv[-3,-1]=()
+
+# Strip a suffixing "/" from such source directory, if present.
+dirname_src="${dirname_src%/}"
+
+# If such target file is an absolute path, set the target directory to the
+# directory containing such file.
+if [[ "${filename_trg_html}" == '/'* ]] {
+    dirname_trg="${filename_trg_html:h}"
+# Else, set the target directory to the current directory and prefix the target
+# file by such directory.
+} else {
+    dirname_trg="${PWD}"
+    filename_trg_html="${dirname_trg}/${filename_trg_html}"
+}
+
+# If such target directory is *NOT* writable, fail.
+[[ -w "${dirname_trg}" ]] || die\
+    '"'${dirname_trg}'/" unwritable by current user '${USER}'.'
+
+# If such source file is *NOT* an absolute path, prefix such path by such target
+# directory. Since the original source file may have been altered by a prior
+# converter in the current conversion, obtain such file from where LyX copied it
+# to in the target directory.
+if [[ "${filename_src_lyx}" != '/'* ]] {
+    filename_src_lyx="${dirname_trg}/${filename_src_lyx}"
+}
+
+# Insist eLyXer output to an intermediate target file rather than the passed
+# target file that LyX expects. While we could permit eLyXer to instead output
+# to the latter, preserving eLyXer's preprocessed output can be helpful for
+# archival and debugging purposes.
+filename_trg_html_old="${filename_trg_html%.html}_old.html"
+
+# ....................{ ELICKER ~ end use                  }....................
+# Enumeration identifying the intended use of output files.
+local end_use='ebook-quality-high'
+
+# Index of such option if passed or the number of passed arguments otherwise.
+integer end_use_index="${@[(ie)--end-use]}"
+
+# If the caller passed the "--end-use" option, localize such option.
+if (( end_use_index <= ${#} )) {
+    end_use="${@[end_use_index]}"
+
+    # Strip such option from the passed arguments.
+    argv[end_use_index]=()
+}
+
+# Validate such option.
+[[ "${end_use}" == ('ebook-'('quality-low'|'quality-high')|'website') ]] || die\
+    "End use \"${end_use}\" unrecognized."
+
+# Validate such option's dependencies.
+# case "${end_use}" {
+# 'ebook-quality-low')
+#     # (( ${+commands[rsvg-convert]} )) || die\
+#     #     '"rsvg-convert" not installed or not in the current ${PATH}.'
+#     ;;
+# }
+
+# ....................{ ELYXER                             }....................
+# Set sane defaults for eLyXer options.
+argv+=(
+    --nofooter
+    --directory "${dirname_src}"
+)
+
+# If the caller passed no "--css" option, attempt to find a local CSS file for
+# use in the output HTML file.
+if (( ${@[(ie)--css]} > ${#} )) {
+    # If the canonical CSS file for eLyXer does *NOT* exist in the source
+    # directory but *SOME* CSS file does, arbitrarily prefer the first such
+    # file. In such case, print a warning as the user may not be expecting this.
+    local filename_src_css="${dirname_src}/lyx.css"
+    if [[ ! -f "${filename_src_css}" ]] {
+        typeset -a filenames_src_css
+        filenames_src_css=( "${dirname_src}/"*.css )
+
+        # If such a file exists, prefer the first such file.
+        if (( ${#filenames_src_css} )) {
+            filename_src_css="${filenames_src_css[1]}"
+            print_warning\
+                "Defaulting to local CSS file \""${filename_src_css}"\".
+Consider renaming such file to \"lyx.css\" to avoid this warning in the future."
+        }
+    }
+
+    # If some such file exists, instruct eLyXer to use such file in lieu of its
+    # default remote CSS file.
+    if [[ -f "${filename_src_css}" ]] {
+        # Copy such file to the target directory.
+        cp -v "${filename_src_css}" "${dirname_trg}"
+
+        # Pass the basename of such file to eLyXer, instructing eLyXer to always
+        # find such file in the same directory as the output HTML file.
+        argv+=( --css "${filename_src_css:t}" )
+    }
+}
+
+# If the caller passed no math display options, sanely default such options.
+if (( ${@[(ie)--mathjax]} > ${#} &&\
+      ${@[(ie)--googlecharts]} > ${#} )) {
+    # If producing low-quality ebooks, display math as bitmap images through
+    # Google Charts.
+    if [[ "${end_use}" == 'ebook-quality-low' ]] {
+        argv+=( --googlecharts )
+    # Else, display math dynamically through MathJax.
+    } elif {
+        local basename_mathjax='MathJax'
+        local\
+            dirname_src_mathjax="${dirname_src}/${basename_mathjax}"\
+            dirname_trg_mathjax="${dirname_trg}/${basename_mathjax}"
+
+        # If a source MathJax subdirectory exists, enable local MathJax usage.
+        if [[ -d "${dirname_src_mathjax}" ]] {
+            # If a target MathJax subdirectory already exists, inform the caller
+            # that such subdirectory will be used as is.
+            if [[ -d "${dirname_trg_mathjax}" ]] {
+                print_warning\
+                    "Reusing target temporary MathJax directory \"${dirname_trg_mathjax}\"."
+            # Else, recursively copy the source MathJax subdirectory to the
+            # target directory.
+            } else {
+                cp -rv "${dirname_src_mathjax}" "${dirname_trg}"
+            }
+
+            # Pass the basename of such directory to eLyXer, instructing eLyXer
+            # to always find such directory in the same directory as the output
+            # HTML file.
+            argv+=( --mathjax "${basename_mathjax}" )
+        # Else, enable remote MathJax usage.
+        } else {
+            argv+=( --mathjax remote )
+        }
+    }
+}
+
+# Run eLyXer, converting such source to target file.
+print_message "Running eLyXer as:
+    elyxer ${*} \"${filename_src_lyx}\" \"${filename_trg_html_old}\""
+command elyxer "${@}"\
+    "${filename_src_lyx}"\
+    "${filename_trg_html_old}"
+
+# ....................{ POST-PROCESS                       }....................
+print_message "Post-processing \"${filename_trg_html}\"..."
+
+# Copy such temporary target file to the target file LyX expects.
+cp "${filename_trg_html_old}" "${filename_trg_html}"
+
+# Load zsh module "zsh/mapfile", providing both read and write access to text
+# file contents by map global ${mapfile}, only for the exact duration of such
+# access. Since unsetting map entries permanently, silently deletes the
+# corresponding files, such module is inherently unsafe and should only be
+# loaded as long as required.
+zmodload zsh/mapfile
+{
+    # If displaying math via MathJax, modify HTML output accordingly.
+    # For safety, performing such changes requires matching multiple lines.
+    # While "awk" or "sed" could be employed to do so, both behave awkwardly
+    # across multiple lines. Instead, leverage the the multiline-matching PCRE
+    # facilities of zsh module "zsh/pcre" to do so. It should be noted that
+    # XMLStarlet is a preferable means of modifying XML. Due to laziness and a
+    # distate for additional dependencies, however, we take the hard way.
+    if (( ${@[(ie)--mathjax]} <= ${#} )) {
+        local mathjax_config mathjax_style
+        print_message "Configuring sane MathJax defaults..."
+
+        # Inline MathJax configuration to be inserted into the output HTML file
+        # immediately prior to loading MathJax.
+        local mathjax_config='<script type="text/x-mathjax-config">'
+
+        # By default, MathJax provides no support for optional LaTeX macro
+        # /nicefrac (which LyX enables by default). Add such support by
+        # augmenting MathJax's internal TeX parser to recognize such macro, as
+        # documented at:
+        # https://github.com/mathjax/mathjax-docs/wiki/Beveled-fraction-like-sfrac,-nicefrac-bfrac
+        mathjax_config+='
+  MathJax.Hub.Register.StartupHook("TeX Jax Ready", function () {
+    var MML = MathJax.ElementJax.mml, TEX = MathJax.InputJax.TeX;
+    TEX.Definitions.macros.nicefrac = "nicefracParser";
+    TEX.Parse.Augment({
+      nicefracParser: function (name) {
+        var num = this.ParseArg(name),
+            den = this.ParseArg(name);
+        this.Push(MML.mfrac(num, den).With({bevelled: true}));
+      }
+    });
+  });'
+
+        # Conclude such configuration.
+        mathjax_config+='
+</script>
+'
+
+        # Inline MathJax CSS styles to be inserted into the output HTML file
+        # immediately after loading MathJax and hence overriding MathJax's
+        # default CSS styles.
+        local mathjax_style='
+<style>'
+
+        # By default, MathJax displays math with a foreground grey color. Since
+        # this is uniformly terrible and almost certainly undesirable for
+        # professional print production, change such color to black.
+        mathjax_style+='
+  .MathJax_Preview { color: black !important }'
+
+        # Conclude such styles.
+        mathjax_style+='
+</style>'
+
+        # Regex matching lines loading MathJax's JavaScript library from the output
+        # HTML file to ${match[1]}, designed so as to match the XHTML output by
+        # eLyXer resembling:
+        #
+        #    # Output when accessing MathJax locally.
+        #
+        #    <script type="text/javascript" src="MathJax/MathJax.js">
+        #      //  Load MathJax and get it running
+        #      MathJax.Hub.Config({ jax: ["input/TeX"],
+        #      config: ["MMLorHTML.js"],
+        #      extensions: ["TeX/AMSmath.js","TeX/AMSsymbols.js"],
+        #      "HTML-CSS": { imageFont: null }
+        #      });
+        #    </script>
+        #
+        #    # Output when accessing MathJax remotely.
+        #    <script type="text/javascript"
+        #      src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+        #    </script>
+        #
+        # Note that "." matches all characters excluding newlines, here.
+        mathjax_pcre='(<script\s++type="text/javascript"\s++src=".+?MathJax.js[^"]*+">[^<]*+</script>)'
+
+        # Match such substring in such file.
+        [[ "${mapfile[${filename_trg_html}]}" =~ "${mathjax_pcre}" ]] || die\
+            '"'${filename_trg_html}'" fails to match PCRE "'${mathjax_pcre}'".'
+
+        # Rewrite such file, embedding such substring unmodified between such
+        # changes.
+        mapfile[${filename_trg_html}]="${mapfile[${filename_trg_html}][1,MBEGIN-1]}${mathjax_config}${match[1]}${mathjax_style}${mapfile[${filename_trg_html}][MEND+1,-1]}"
+    }
+
+    # Remove all forward references to index and glossary entries from the body
+    # of such document. While LaTeX hides such references by default, eLyXer
+    # displays such references as Unicode down arrows. Since readers rarely care
+    # whether and where the index or glossary references the current sentence,
+    # hiding such references tends to produce significantly more readable and
+    # navigable text.  Moreover, since titles can contain such references *AND*
+    # since such references can be concatenated together, displaying such
+    # references as arrows tends to produce unaesthetic output.
+    #
+    # Specifically, globally replace all "<a>...</a>" tags resembling:
+    #
+    # * <a class="IndexReference" name="entry-Fruit-patterns-Watermelon-spiral-0" href="#index-Fruit-patterns-Watermelon-spiral">↓</a>
+    # * <a class="NomenclatureEntry" name="noment-vitalism" href="#nom-vitalism">↓</a>
+    print_message "Removing empty forward references..."
+
+    # Original text of such file. For efficiency, iteration below modifies
+    # such text "in-place."
+    local text_old="${mapfile[${filename_trg_html}]}"
+
+    # Replaced text of such file.
+    local text_new
+
+    # While there exist substrings matching such PCRE in such text, dynamically
+    # replace such substrings with their replacement. Since each such
+    # replacement guaranteeably replaces such match, the implementation below
+    # need *NOT* store the byte offset of the current match to string global
+    # ${ZPCRE_OP} (unlike most PCRE match iterations). Such implementation
+    # strongly resembles that of for_string_text_matching_pcre:() but differs enough to
+    # warrant separation here. See such function for further details.
+    #
+    # For efficiency, avoid performing brute-force matching ala
+    # 'while is "${text_old__rltmpbt}" =~ "${pcre__rltmpbt}" si {...}'. Such
+    # approach does suffice to implement the desired iteration but could
+    # conceivably recompile such PCRE on each iteration (depending on zsh
+    # internals) and in any case is unlikely to optimize such compilation by
+    # internally calling pcre_study().
+    pcre_compile -- '<a[^>]++>↓</a>'
+    pcre_study
+
+    # Unfortunately, pcre_match() fails to set global integers ${MBEGIN} and
+    # ${MEND} to the character indices of the start and end of the matched
+    # substring. Fortunately, it sets global string ${ZPCRE_OP} to the " "-
+    # delimited *BYTE* indices of the start and end of such substring.
+    # Unfortunately, multibyte strings (e.g., UTF8-encoded) are indexed with
+    # character rather than byte indices under default zsh option "multibyte".
+    # Fortunately, such option can be locally disabled to force zsh to index all
+    # strings (multibyte or not) with byte rather than character indices.
+    unsetopt multibyte
+
+    while { pcre_match -b -- "${text_old}" } {
+        # If such substring is empty, throw an exception. This avoids infinite
+        # loops on perverse PCREs matching only zero-width assertions or the
+        # empty string.
+        (( ${#MATCH} )) || die 'PCRE erroneously matched the empty string.'
+
+        # Append the replaced text by the portion of the original text preceding
+        # such match.
+        text_new+="${text_old[1,${ZPCRE_OP[(w)1]}]}"
+
+        # Reduce the original text to the portion following such match.
+        text_old="${text_old[${ZPCRE_OP[(w)2]},-1]}"
+
+        setopt multibyte
+        text_old="${text_old[2,-1]}"
+        unsetopt multibyte
+    }
+
+    # Set such scalar to such replaced text followed by all remaining original
+    # text. To avoid extraneous string copies, inline such implementation.
+    mapfile[${filename_trg_html}]="${text_new}${text_old}"
+
+    # Reenable default character indexing.
+    setopt multibyte
+# For safety, unload "zsh/mapfile" even in the event of exceptions.
+} always {
+    zmodload -ui zsh/mapfile
+}
+
+# --------------------( WASTELANDS                         )--------------------
+    # Else if *ANY* CSS file exists in such directory, arbitrarily prefer the
+    # first such file in such directory. Since the user may not necessarily be
+    # expecting this, print a warning.
+
+    # directory, prefer such file to eLyXer's default remote CSS file.
+
+    # Specifically:
+    #
+    # * Change the math color from default grey (bad!) to black (good).
+
+ # This is a string
+# constrained to the following choices:
+#
+# * "ebook-quality-low", instructing this script to output quality-low files
+#   intended for use with EPUB2 and/or MOBI ebook readers.
+# * "ebook-quality-high", instructing this script to output quality-high files
+#   intended for use with EPUB3 and/or KF8 ebook readers.
+# * "website", instructing this script to output quality-high files intended for
+#   publication onto a website.
+# , replacing "My Book Title" with the title of
+# your current LyX document
+# If producing quality-low ebooks via option "--end-use ebook-quality-low",
+# elicker also requires the following dependencies:
+#
+# * rsvg-convert >= 2.30.0. While Inkscape also produces acceptable output,
+#   rsvg-convert tends to be more efficient and standards conformant.
+
+        # If producing quality-low ebooks, configure MathJax to output SVGs rather
+        # than HTML.
+        # if [[ "${end_use}" == 'ebook-quality-low' ]] {
+        #     mathjax_config+=''
+        # }
+
+    # Establish sane MathJax defaults, including:
+    #
+    # * Creating SVG files when producing quality-low ebooks.
+    # * Changing the math color from default grey (bad!) to black (good).
+
+# Optional files and subdirectories of such directory.
+# local\
+#     dirname_src_mathjax="${dirname_src}/MathJax"\
+#     filename_src_css="${dirname_src}/lyx.css"
+    #FUXME: If this is *STILL* too slow, resort to in-place "sed". *shrug*
+
+#   argv=( "${argv[1,end_use_index-1]}" "${argv[end_use_index+1,-1]}" )
+#   mapfile[${filename_trg_html}]="${mapfile[${filename_trg_html}]//\<a[^>]#\>↓\</a\>}"
+    # across multiple lines. Instead, leverage the text file expansion
+    # facilities of zsh module "zsh/mapfile" along with the multiline-matching
+    # PCRE facilities of zsh module "zsh/pcre" to do so. Since "zsh/mapfile" is
+    # a rather unsafe module to leave loaded, load such module only for the
+    # duration of such change.
+
+    # Regex matching the loading of MathJax's JavaScript library from the output
+    # HTML file to ${match[1]} and the remainder of such file to ${match[2]}.
+#   local pcre='(.*?src=".*?MathJax.js[^"]++">\n</script>)(.*)'
+
+#command sed -ie\
+    #'s~\(</script>\)~\1<style>.MathJax_Preview { color: black !important}</style>~'\
+    #"${filename_trg_html}"
+# Directory containing the original source LyX file.
+#dirname_src="${filename_src_lyx_old:h}"
+
+# List set of all passed arguments, excluding repeated arguments and including
+# sane defaults.
+#typeset -Ua options
+#options=( "${@[1,-4]}" '--nofooter' )
+
+# Pop such filenames from the argument list, leaving only eLyXer options.
+#argv[-2,-1]=()
