@@ -15,7 +15,9 @@ _elicker_ :: sanitary wrapper for eLyXer, optimizing output HTML to real-world e
 * [eLyXer](http://alexfernandez.github.io/elyxer) >= 1.2.5.
 * [zsh](http://www.zsh.org) >= 4.3.0.
 
-After installing such dependencies, simply copy `elicker` to a directory in the `${PATH}` of the current user (e.g., `/usr/local/bin`). **"[Hey, and away we go.](http://www.youtube.com/watch?v=SZuutY1W0SY)"**
+After installing such dependencies, simply copy `elicker` to a directory in the current user's `${PATH}` (e.g., `/usr/local/bin`).
+
+**[Hey, and away we go.](http://www.youtube.com/watch?v=SZuutY1W0SY)**
 
 ## Usage
 
@@ -23,7 +25,7 @@ After installing such dependencies, simply copy `elicker` to a directory in the 
 elicker [OPTIONS]... SOURCE_DIRECTORY SOURCE_LYX_FILE TARGET_HTML_FILE
 ```
 
-`elicker` _is_ runnable directly from the command line, but mostly intended to be run from within LyX. To do so, edit the `Converter:` field in LyX's _Tools_ → _Preferences_ → _File Handling_ → _Converters_ dialog to read:
+While `elicker` _is_ runnable directly from the command line, `elicker` is mostly intended to be run from within LyX. To do so, edit the `Converter:` field in LyX's _Tools_ → _Preferences_ → _File Handling_ → _Converters_ dialog to read:
 
 ```
 elicker --title "My Book Title" $$r $$i $$o

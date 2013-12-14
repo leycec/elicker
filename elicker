@@ -33,13 +33,62 @@
 # Convert the passed source LyX file in the passed directory into the passed
 # target HTML file via external Python converter eLyXer passed the passed
 # options. After running eLyXer, elicker sanitizes the produced HTML file.
+#
+# --------------------( SEE ALSO                           )--------------------
+# * epubcheck, an open-source JAVA CLI utility for validating both the contents
+#   of both EPUB2 and EPUB3 ebooks:
+#   https://github.com/IDPF/epubcheck
 
+#FIXME: Patch "elyxer" if <= 1.2.5 with the correct Google Charts image *IF AND
+#ONLY IF* such option is enabled. This will require copying "elyxer" to
+#${dirname_trg} if such file has not already been copied and patching it there
+#-- ideally, with a simple "sed -ie" command. The culprit is:
+#
+#     u'googlecharts':u'http://chart.googleapis.com/chart?cht=tx&chl=', 
+#
+#...which should instead read:
+#
+#     u'googlecharts':u'http://chart.apis.google.com/chart?cht=tx&chl=', 
+#FIXME: After successfully patching such issue, file a bug on eLyXer's tracker.
+
+#FIXME: Remove inessential files from copied MathJax subdirectories. See:
+#https://github.com/mathjax/MathJax-docs/wiki/Guide%3A-reducing-size-of-a-mathjax-installation
+#FIXME: Inform the user after completion of all target files and directories the
+#user will need to save to retain a complete, working HTML document. This should
+#include images as well as CSS and Javascript.
 #FIXME: The "README.md" should explicitly document all of the nifty things we do
 #here. Too many to exhaustively list here, so grep below!
-#FIXME: Is there any tangible difference between the "website" and
-#"ebook-quality-high" end uses? If not, elicker use could probably be simplified
-#by simply providing a single "--quality" option currently accepting only two
-#possible strings "low" and "high" (e.g., "--quality high").
+
+#FIXME: Our MathML fixes may prove insufficient for real-world EPUB3 use. The
+#blog article "How to include MathJax in an epub3 file to work with iBooks (and
+#possibly others)" suggests a somewhat more robust MathJax configuration, as
+#described at:
+#
+#    http://boolesrings.org/krautzberger/2013/01/13/how-to-include-mathjax-in-an-epub3-file-to-work-with-ibooks-and-possibly-others/
+#
+#At such article, the author also notes that "I went all the way and restricted
+#output to SVG — to minimize things and to make it work. HTML output should work
+#on iOS5, but last I checked Apple changed something on iOS6 that I couldn’t
+#track down for lack of devices." This is interesting, because eLyXer currently
+#restricts output to HTML+CSS rather than CSS. Food for future thought!
+#
+#    <script type="text/x-mathjax-config">
+#    MathJax.Hub.Config({
+#    jax: ["input/TeX","input/MathML","output/SVG"],
+#    extensions: ["tex2jax.js","mml2jax.js","MathEvents.js"],
+#    TeX: {
+#    extensions: ["noErrors.js","noUndefined.js","autoload-all.js"]
+#    },
+#    MathMenu: {
+#    showRenderer: false
+#    },
+#    menuSettings: {
+#    zoom: "Click"
+#    },
+#    messageStyle: "none"
+#    });
+#    </script>
+#    <script type="text/javascript" src="../mathjax/MathJax.js"> </script>
 
 # ....................{ GLOBALS                            }....................
 # Current elicker version.
@@ -54,29 +103,26 @@ typeset -g ELICKER_ELYXER_VERSION_RECOMMENDED='1.2.5'
 # elicker help printed when the caller passes option "--help".
 typeset -g ELICKER_HELP='Usage: elicker [OPTIONS]... SOURCE_DIRECTORY SOURCE_LYX_FILE TARGET_HTML_FILE
 
-A sanitary wrapper for eLyXer optimizing output HTML for consumer end use
+A sanitary wrapper for eLyXer optimizing output content for real-world end use
 (e.g., EPUB2 ebook readers), intended to be run from within LyX by changing the
 "Tools->Preferences->File Handling->Converters" dialog field "Converter:" to:
 
     elicker --title "My Book Title" $$r $$i $$o
 
 Since neither elicker or eLyXer are capable of automatically copying the title
-from input LyX documents to output HTML files, specify such title as above.
+from input LyX documents to output XHTML files, specify such title as above.
 
 elicker supports all options and arguments supported by eLyXer, as well as
 the following elicker-specific options:
 
-  --end-use END-USE              optimize output HTML for the passed END-USE,
-                                 either "website", "ebook-quality-high", or
-                                 "ebook-quality-low" as follows (defaults to
-                                 "ebook-quality-high"):
+      --quality QUALITY       output content of the specified QUALITY, either
+                              "high" (the default) or "low": e.g.,
 
-    --end-use website              output high-quality XHTML intended for
-                                   publication directly to a website
-    --end-use ebook-quality-high   output high-quality XHTML intended for
-                                   publication as an EPUB3 and/or KF8 ebook
-    --end-use ebook-quality-low    output low-quality XHTML intended for
-                                   publication as an EPUB2 and/or MOBI ebook
+         --quality high       output high-quality content, intended for
+                              publication either directly onto websites or
+                              within EPUB3-conformant ebooks (e.g., KF8)
+         --quality low        output low-quality content, intended for
+                              publication within EPUB2 or MOBI ebooks
 
 eLyXer options and arguments are as follows:
 '
@@ -178,7 +224,7 @@ if (( ${@[(i)--(help|lyxformat|version)]} <= ${#} )) {
 # If the caller passed fewer than the required number of arguments, print the
 # elicker help to standard error and terminate with failure.
 (( # >= 3 )) || die_with_help\
-    'Expected optional eLyXer options, one absolute base dirname, one absolute or relative source LyX filename, and one absolute or relative target HTML filename.'
+    'Expected optional elicker and/or eLyXer options, one absolute base dirname, one absolute or relative source LyX filename, and one absolute or relative target HTML filename.'
 
 local\
     dirname_src="${@[-3]}"\
@@ -224,38 +270,63 @@ if [[ "${filename_src_lyx}" != '/'* ]] {
 # archival and debugging purposes.
 filename_trg_html_old="${filename_trg_html%.html}_old.html"
 
-# ....................{ ELICKER ~ end use                  }....................
-# Enumeration identifying the intended use of output files.
-local end_use='ebook-quality-high'
+# ....................{ OPTIONS                            }....................
+# Map of elicker-specific command-line options passed to this script. Each map
+# key is the name of such an option (always prefixed by "-" or "--"); each map
+# value is the first shell word following such option if such option accepts a
+# value or the empty string otherwise.
+typeset -A elicker_options
 
-# Index of such option if passed or the number of passed arguments otherwise.
-integer end_use_index="${@[(ie)--end-use]}"
+# Set such map by parsing such options according to the passed option
+# specifications, preserving unparsed options for subsequent parsing by the
+# caller. If parsing fails, print the elicker help to standard error and
+# terminate with failure. Dismantled, this is:
+#
+# * "-D", removing *ONLY* parsed options from the current argument list.
+# * "-E", *NOT* halting parsing at the first option *NOT* matching a passed
+#   option specification, thus ignoring all unspecified options.
+# * "-M", parsing "="-prefixed substrings in option specifications as the
+#   map key to parse such option into (e.g., "-help=h" parses long option
+#   "--help" into map key '-h' rather than '--help'). By default, "="-prefixed
+#   substrings denote the target list or map name to parse such option into.
+# * "-A", parsing passed options into the above map.
+zparseopts -M -D -E -A elicker_options -- -quality: ||
+    die_with_help 'Invalid command-line argument(s).'
+#print_message "elicker_options: ${(kv@)elicker_options}"
 
-# If the caller passed the "--end-use" option, localize such option.
-if (( end_use_index <= ${#} )) {
-    end_use="${@[end_use_index]}"
+# ....................{ OPTIONS ~ quality                  }....................
+# Enumeration identifying the intended quality of output content.
+local quality='high'
 
-    # Strip such option from the passed arguments.
-    argv[end_use_index]=()
+# If the caller passed the "--quality" option, localize such option.
+if (( ${+elicker_options[--quality]} )) {
+    quality="${elicker_options[--quality]}"
 }
 
 # Validate such option.
-[[ "${end_use}" == ('ebook-'('quality-low'|'quality-high')|'website') ]] || die\
-    "End use \"${end_use}\" unrecognized."
+[[ "${quality}" == ('high'|'low') ]] || die\
+    "Quality \"${quality}\" unrecognized."
 
-# Validate such option's dependencies.
-# case "${end_use}" {
-# 'ebook-quality-low')
-#     # (( ${+commands[rsvg-convert]} )) || die\
-#     #     '"rsvg-convert" not installed or not in the current ${PATH}.'
-#     ;;
-# }
+# ....................{ OPTIONS ~ print                    }....................
+# Inform the user of all elicker-specific options.
+print_message "Parsed elicker options:
+    --quality ${quality}"
 
 # ....................{ ELYXER                             }....................
 # Set sane defaults for eLyXer options.
 argv+=(
-    --nofooter
+    # Inform eLyXer of the source directory containing external resources
+    # required by such LyX document (e.g., embedded images).
     --directory "${dirname_src}"
+
+    # Coerce all non-JPEG bitmap images to JPEG, thereby substantially reducing
+    # filesize with little to no discernable loss in visual quality. While this
+    # is particularly essential for use with ebooks, reducing filesize reduces
+    # bandwidth costs and hence is also beneficial for use on websites.
+    --imageformat '.jpg'
+
+    # Prevent eLyXer from printing a "Produced with eLyXer"-style footer.
+    --nofooter
 )
 
 # If the caller passed no "--css" option, attempt to find a local CSS file for
@@ -295,7 +366,7 @@ if (( ${@[(ie)--mathjax]} > ${#} &&\
       ${@[(ie)--googlecharts]} > ${#} )) {
     # If producing low-quality ebooks, display math as bitmap images through
     # Google Charts.
-    if [[ "${end_use}" == 'ebook-quality-low' ]] {
+    if [[ "${quality}" == 'low' ]] {
         argv+=( --googlecharts )
     # Else, display math dynamically through MathJax.
     } elif {
@@ -363,17 +434,18 @@ zmodload zsh/mapfile
         # immediately prior to loading MathJax.
         local mathjax_config='<script type="text/x-mathjax-config">'
 
-        # By default, MathJax provides no support for optional LaTeX macro
-        # /nicefrac (which LyX enables by default). Add such support by
-        # augmenting MathJax's internal TeX parser to recognize such macro, as
-        # documented at:
+        # By default, MathJax provides no support for optional LaTeX macros
+        # /nicefrac (which LyX enables by default) and /xfrac. Add such support
+        # by augmenting MathJax's internal TeX parser to recognize such macro,
+        # as documented by:
         # https://github.com/mathjax/mathjax-docs/wiki/Beveled-fraction-like-sfrac,-nicefrac-bfrac
         mathjax_config+='
   MathJax.Hub.Register.StartupHook("TeX Jax Ready", function () {
     var MML = MathJax.ElementJax.mml, TEX = MathJax.InputJax.TeX;
-    TEX.Definitions.macros.nicefrac = "nicefracParser";
+    TEX.Definitions.macros.nicefrac = "bevelledFractionParser";
+    TEX.Definitions.macros.xfrac = "bevelledFractionParser";
     TEX.Parse.Augment({
-      nicefracParser: function (name) {
+      bevelledFractionParser: function (name) {
         var num = this.ParseArg(name),
             den = this.ParseArg(name);
         this.Push(MML.mfrac(num, den).With({bevelled: true}));
@@ -513,6 +585,72 @@ zmodload zsh/mapfile
 }
 
 # --------------------( WASTELANDS                         )--------------------
+# ....................{ OPTIONS ~ quality                  }....................
+# Enumeration identifying the intended quality of output content.
+# local quality='high'
+# 
+# # Index of such option if passed or the number of passed arguments otherwise.
+# integer quality_index="${@[(ie)--quality]}"
+# 
+# # If the caller passed the "--quality" option, localize such option.
+# if (( quality_index <= ${#} )) {
+#     quality="${@[quality_index]}"
+# 
+#     # Strip such option from such arguments to prevent eLyXer from panicking.
+#     argv[quality_index]=()
+# }
+# 
+# # Validate such option.
+# [[ "${quality}" == ('high'|'low') ]] || die\
+#     "Quality \"${quality}\" unrecognized."
+
+#FUXME: Also support \xfrac LaTeX macros. One line addition, which is nice.
+#FUXME: Permit the user to pass only two arguments by making the ${dirname_src}
+#argument optional (defaulting to the dirname of the passed input LYX file).
+#FUXME: Is there any tangible difference between the "website" and
+#"ebook-quality-high" end uses? If not, elicker use could probably be simplified
+#by simply providing a single "--quality" option currently accepting only two
+#possible strings "low" and "high" (e.g., "--quality high").
+
+# ....................{ ELICKER ~ quality                  }....................
+# Enumeration identifying the intended use of output files.
+# local quality='ebook-quality-high'
+# 
+# # Index of such option if passed or the number of passed arguments otherwise.
+# integer quality_index="${@[(ie)--quality]}"
+# 
+# # If the caller passed the "--quality" option, localize such option.
+# if (( quality_index <= ${#} )) {
+#     quality="${@[quality_index]}"
+# 
+#     # Strip such option from the passed arguments.
+#     argv[quality_index]=()
+# }
+# 
+# # Validate such option.
+# [[ "${quality}" == ('ebook-'('quality-low'|'quality-high')|'website') ]] || die\
+#     "End use \"${quality}\" unrecognized."
+# 
+# Validate such option's dependencies.
+# case "${quality}" {
+# 'ebook-quality-low')
+#     # (( ${+commands[rsvg-convert]} )) || die\
+#     #     '"rsvg-convert" not installed or not in the current ${PATH}.'
+#     ;;
+# }
+
+#  --quality quality              optimize output HTML for the passed quality,
+#                                 either "website", "ebook-quality-high", or
+#                                 "ebook-quality-low" as follows (defaults to
+#                                 "ebook-quality-high"):
+#
+#    --quality website              output high-quality XHTML intended for
+#                                   publication directly to a website
+#    --quality ebook-quality-high   output high-quality XHTML intended for
+#                                   publication as an EPUB3 and/or KF8 ebook
+#    --quality ebook-quality-low    output low-quality XHTML intended for
+#                                   publication as an EPUB2 and/or MOBI ebook
+
     # Else if *ANY* CSS file exists in such directory, arbitrarily prefer the
     # first such file in such directory. Since the user may not necessarily be
     # expecting this, print a warning.
@@ -534,7 +672,7 @@ zmodload zsh/mapfile
 #   publication onto a website.
 # , replacing "My Book Title" with the title of
 # your current LyX document
-# If producing quality-low ebooks via option "--end-use ebook-quality-low",
+# If producing quality-low ebooks via option "--quality ebook-quality-low",
 # elicker also requires the following dependencies:
 #
 # * rsvg-convert >= 2.30.0. While Inkscape also produces acceptable output,
@@ -542,7 +680,7 @@ zmodload zsh/mapfile
 
         # If producing quality-low ebooks, configure MathJax to output SVGs rather
         # than HTML.
-        # if [[ "${end_use}" == 'ebook-quality-low' ]] {
+        # if [[ "${quality}" == 'ebook-quality-low' ]] {
         #     mathjax_config+=''
         # }
 
@@ -557,7 +695,7 @@ zmodload zsh/mapfile
 #     filename_src_css="${dirname_src}/lyx.css"
     #FUXME: If this is *STILL* too slow, resort to in-place "sed". *shrug*
 
-#   argv=( "${argv[1,end_use_index-1]}" "${argv[end_use_index+1,-1]}" )
+#   argv=( "${argv[1,quality_index-1]}" "${argv[quality_index+1,-1]}" )
 #   mapfile[${filename_trg_html}]="${mapfile[${filename_trg_html}]//\<a[^>]#\>↓\</a\>}"
     # across multiple lines. Instead, leverage the text file expansion
     # facilities of zsh module "zsh/mapfile" along with the multiline-matching
