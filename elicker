@@ -36,59 +36,56 @@
 #
 # --------------------( SEE ALSO                           )--------------------
 # * epubcheck, an open-source JAVA CLI utility for validating both the contents
-#   of both EPUB2 and EPUB3 ebooks:
+#   of both EPUB2 and EPUB3 ebooks (as well generating proper ebook manifests):
 #   https://github.com/IDPF/epubcheck
 
-#FIXME: Patch "elyxer" if <= 1.2.5 with the correct Google Charts image *IF AND
-#ONLY IF* such option is enabled. This will require copying "elyxer" to
-#${dirname_trg} if such file has not already been copied and patching it there
-#-- ideally, with a simple "sed -ie" command. The culprit is:
+#FIXME: MathJax 2.3 is *INSANELY* huge, and it's only going to get larger. We
+#desparately need to shrink this even further. Examining "du MathJax", it's
+#clear that SVG output and non-TeX fonts (i.e., so-called web fonts) are yet
+#more space hogs. The offending subdirectories are:
 #
-#     u'googlecharts':u'http://chart.googleapis.com/chart?cht=tx&chl=', 
+#* "fonts/HTML-CSS" excluding "./TeX", 13MB. This includes STIX fonts, which
+#  most LaTeX commentators claim to be vastly inferior to TeX fonts. I would
+#  probably concur with such claim, largely due to the fact that the STIX fonts
+#  were designed by a consortium of corporations and governments of varying
+#  budgets and motivations. Needless to say, the result is a bit hodgepodge.
+#  This StackExchange confirms this suspicion:
+#  http://meta.math.stackexchange.com/questions/11456/use-tex-fonts-by-default-even-if-stix-fonts-are-installed
+#  Yup! Unsurprisingly, the STIX fonts are fairly terrible.
+#* "jax/output/SVG", also 13MB.
 #
-#...which should instead read:
+#Altogether, excising such subdirectories nets us 26MB, which is probably
+#essential. After doing so, consider also adopting the following MathJax
+#configuration, courtesy a great GoogleGroups thread on slimming MathJax:
+#https://groups.google.com/forum/#!topic/mathjax-users/2SrqHRd9tmA
 #
-#     u'googlecharts':u'http://chart.apis.google.com/chart?cht=tx&chl=', 
-#FIXME: After successfully patching such issue, file a bug on eLyXer's tracker.
+#    <script type="text/x-mathjax-config">
+#      MathJax.Hub.Config({
+#        extensions: ["tex2jax.js"],
+#        menuSettings: {zoom: "Double-Click", zscale: "300%"},
+#        jax: ["input/TeX","output/HTML-CSS"],
+#        MathMenu: {showRenderer: false},
+#        "HTML-CSS": {
+#            availableFonts: ["TeX"],
+#            preferredFont: "TeX",
+#            imageFont: null
+#        }
+#      });
+#    </script>
+#
+#I'm not sure we require *ALL* of it, but the salient subsection appears to span
+#from "jax:" to the last curly brace. I've confirmed the "HTML-CSS" fragment, at
+#least, to be the canonical means of acheiving that effect. Yay!
+#
+#To enable such configuration, I'm afraid we'll have to obliterate eLyXer's
+#default MathJax configuration and replace with it our own. Small price to pay,
+#however!
 
-#FIXME: Remove inessential files from copied MathJax subdirectories. See:
-#https://github.com/mathjax/MathJax-docs/wiki/Guide%3A-reducing-size-of-a-mathjax-installation
 #FIXME: Inform the user after completion of all target files and directories the
 #user will need to save to retain a complete, working HTML document. This should
 #include images as well as CSS and Javascript.
 #FIXME: The "README.md" should explicitly document all of the nifty things we do
 #here. Too many to exhaustively list here, so grep below!
-
-#FIXME: Our MathML fixes may prove insufficient for real-world EPUB3 use. The
-#blog article "How to include MathJax in an epub3 file to work with iBooks (and
-#possibly others)" suggests a somewhat more robust MathJax configuration, as
-#described at:
-#
-#    http://boolesrings.org/krautzberger/2013/01/13/how-to-include-mathjax-in-an-epub3-file-to-work-with-ibooks-and-possibly-others/
-#
-#At such article, the author also notes that "I went all the way and restricted
-#output to SVG — to minimize things and to make it work. HTML output should work
-#on iOS5, but last I checked Apple changed something on iOS6 that I couldn’t
-#track down for lack of devices." This is interesting, because eLyXer currently
-#restricts output to HTML+CSS rather than CSS. Food for future thought!
-#
-#    <script type="text/x-mathjax-config">
-#    MathJax.Hub.Config({
-#    jax: ["input/TeX","input/MathML","output/SVG"],
-#    extensions: ["tex2jax.js","mml2jax.js","MathEvents.js"],
-#    TeX: {
-#    extensions: ["noErrors.js","noUndefined.js","autoload-all.js"]
-#    },
-#    MathMenu: {
-#    showRenderer: false
-#    },
-#    menuSettings: {
-#    zoom: "Click"
-#    },
-#    messageStyle: "none"
-#    });
-#    </script>
-#    <script type="text/javascript" src="../mathjax/MathJax.js"> </script>
 
 # ....................{ GLOBALS                            }....................
 # Current elicker version.
@@ -115,14 +112,21 @@ from input LyX documents to output XHTML files, specify such title as above.
 elicker supports all options and arguments supported by eLyXer, as well as
 the following elicker-specific options:
 
+      --platform PLATFORM     output content intended for the specified type of
+                              publication PLATFORM, either "ebook" (the default)
+                              or "website": e.g.,
+         --platform ebook     output content intended for publication as
+                              offline ebooks of any format
+         --platform website   output content intended for publication directly
+                              onto websites
+
       --quality QUALITY       output content of the specified QUALITY, either
                               "high" (the default) or "low": e.g.,
-
          --quality high       output high-quality content, intended for
-                              publication either directly onto websites or
-                              within EPUB3-conformant ebooks (e.g., KF8)
+                              publication either directly onto websites or as
+                              EPUB3-conformant ebooks (e.g., KF8)
          --quality low        output low-quality content, intended for
-                              publication within EPUB2 or MOBI ebooks
+                              publication as EPUB2- or MOBI-conformant ebooks
 
 eLyXer options and arguments are as follows:
 '
@@ -290,9 +294,22 @@ typeset -A elicker_options
 #   "--help" into map key '-h' rather than '--help'). By default, "="-prefixed
 #   substrings denote the target list or map name to parse such option into.
 # * "-A", parsing passed options into the above map.
-zparseopts -M -D -E -A elicker_options -- -quality: ||
+zparseopts -M -D -E -A elicker_options -- -platform: -quality: ||
     die_with_help 'Invalid command-line argument(s).'
 #print_message "elicker_options: ${(kv@)elicker_options}"
+
+# ....................{ OPTIONS ~ platform                  }....................
+# Enumeration identifying the intended platform of output content.
+local platform='ebook'
+
+# If the caller passed the "--platform" option, localize such option.
+if (( ${+elicker_options[--platform]} )) {
+    platform="${elicker_options[--platform]}"
+}
+
+# Validate such option.
+[[ "${platform}" == ('ebook'|'website') ]] || die\
+    "Platform \"${platform}\" unrecognized."
 
 # ....................{ OPTIONS ~ quality                  }....................
 # Enumeration identifying the intended quality of output content.
@@ -310,6 +327,7 @@ if (( ${+elicker_options[--quality]} )) {
 # ....................{ OPTIONS ~ print                    }....................
 # Inform the user of all elicker-specific options.
 print_message "Parsed elicker options:
+    --platform ${platform}
     --quality ${quality}"
 
 # ....................{ ELYXER                             }....................
@@ -319,15 +337,20 @@ argv+=(
     # required by such LyX document (e.g., embedded images).
     --directory "${dirname_src}"
 
-    # Coerce all non-JPEG bitmap images to JPEG, thereby substantially reducing
-    # filesize with little to no discernable loss in visual quality. While this
-    # is particularly essential for use with ebooks, reducing filesize reduces
-    # bandwidth costs and hence is also beneficial for use on websites.
-    --imageformat '.jpg'
-
     # Prevent eLyXer from printing a "Produced with eLyXer"-style footer.
     --nofooter
 )
+
+# If the caller passed no "--imageformat" option, coerce all non-JPEG bitmap
+# images to JPEG. This substantially reduces file size with little to no
+# discernable loss in visual quality. Due to hardware constraints under first-
+# generation ebook readers, such reductions typically improve the portability of
+# ebooks converted from such output. Likewise, due to bandwidth constraints
+# under typical website hosts, such reductions also reduce the overhead of
+# publishing books directly to websites.
+if (( ${@[(ie)--imageformat]} > ${#} )) {
+    argv+=( --imageformat '.jpg' )
+}
 
 # If the caller passed no "--css" option, attempt to find a local CSS file for
 # use in the output HTML file.
@@ -383,9 +406,73 @@ if (( ${@[(ie)--mathjax]} > ${#} &&\
                 print_warning\
                     "Reusing target temporary MathJax directory \"${dirname_trg_mathjax}\"."
             # Else, recursively copy the source MathJax subdirectory to the
-            # target directory.
+            # target directory and remove all optional files and subdirectories
+            # from such copy. This is critical, as the uncompressed MathJax
+            # distribution rapidly approaches 100MB in size.  For further
+            # details, see the quasi-official guide to "reducing the size of a
+            # mathjax installation":
+            # https://github.com/mathjax/MathJax-docs/wiki/Guide%3A-reducing-size-of-a-mathjax-installation
+            #
+            # Note that this is a "blacklist" approach, explicitly copying all
+            # possible paths and then removing unwanted paths from such copy.
+            # The alternative is a "whitelist" approach, explicitly copying only
+            # the required paths and hence requiring no subsequent removal.
+            #
+            # While the latter is clearly more efficient, the former is
+            # considerably more future-proof. We can be reasonably sure that all
+            # currently optional files and subdirectories are likely to remain
+            # optional regardless of future changes to MathJax structure and
+            # content. We cannot, however, be reasonably sure that such changes
+            # will *NOT* introduce requisite files or subdirectories which our
+            # static implementation here would neglect to copy over. Hence, we
+            # adopt the "blacklist" approach.
             } else {
                 cp -rv "${dirname_src_mathjax}" "${dirname_trg}"
+
+                # Remove MathJax paths guaranteed to be optional under all
+                # custom MathJax configurations, including:
+                #
+                # * Documentation (e.g., "docs/", "LICENSE", "README*").
+                # * Unit tests (e.g., "test/").
+                # * Ancillary files (e.g., ".gitignore", "bower.json").
+                rm -rf "${dirname_trg}"/{docs,test,unpacked}
+                rm -f "${dirname_trg}"/{LICENSE,README*,.gitignore,bower.json}
+
+                # Remove all stock MathJax configurations except "MMLorHTML.js",
+                # explicitly referenced by eLyXer output. zsh to the rescue!
+                rm -rf "${dirname_trg}"/config/*~*/MMLorHTML.js
+
+                # Remove all image fonts. This is safe *ONLY* under custom
+                # MathJax configurations setting "imageFont: null". Fortunately,
+                # eLyXer guarantees such setting when using MathJax locally --
+                # which, of course, this conditional ensures we are.
+                rm -rf "${dirname_trg}"/fonts/HTML-CSS/TeX/png
+
+                # Remove all non-TeX input options (e.g., MathML).
+                rm -rf "${dirname_trg}"/jax/input~*/TeX
+
+                # If tailoring output for ebooks, remove the following fonts
+                # unlikely to ever be supported by ebook readers:
+                #
+                # * Starting with "MathJax_Win", Windows-specific fonts.
+                # * In subdirectories "eot/", Internet Explorer-specific fonts.
+                # * In subdirectories "svg/", Scalable Vector Graphics "fonts."
+                #   Ebook support for SVG has always been spotty at best, and
+                #   are unlikely to benefit from glyph-specific SVGs intended to
+                #   be rendered inline text. Note this does *NOT* remove SVG as
+                #   an output option, as MathJax renders SVG output separately.
+                #   The following article's "Slimming down mathjax" section
+                #   corroborates such choice:
+                #   http://boolesrings.org/krautzberger/2011/10/17/epub-mathjax-and-the-ipad-another-attempt
+                #
+                # The following fonts should generally *NOT* be removed:
+                #
+                # * In subdirectories "woff", W3C-standardized web fonts
+                #   explicitly supported by the EPUB3 standard.
+                if [[ "${platform}" == 'ebook' ]] {
+                    rm -rf "${dirname_trg}"/fonts/HTML-CSS/**/{eot,svg}
+                    rm -f "${dirname_trg}"/fonts/HTML-CSS/**/MathJax_Win*
+                }
             }
 
             # Pass the basename of such directory to eLyXer, instructing eLyXer
@@ -585,6 +672,94 @@ zmodload zsh/mapfile
 }
 
 # --------------------( WASTELANDS                         )--------------------
+                # * "svg", purportedly required under old iOS iterations. (This
+                #   should probably be verified!)
+#FUXME: We need a new option "--platform" accepting either "ebook" or "website"
+#(defaulting to "ebook"). When publishing for ebooks, we'll want to adjust
+#behavior as follows:
+#
+#* If using MathJax locally, eliminate all "eot" and "woff" fonts, which are
+#  web-specific fonts unlikely to ever be supported by ebook readers.
+
+#FUXME: Our MathJax fixes may prove insufficient for real-world EPUB3 use. The
+#blog article "How to include MathJax in an epub3 file to work with iBooks (and
+#possibly others)" suggests a somewhat more robust MathJax configuration, as
+#described at:
+#
+#    http://boolesrings.org/krautzberger/2013/01/13/how-to-include-mathjax-in-an-epub3-file-to-work-with-ibooks-and-possibly-others/
+#
+#At such article, the author also notes that "I went all the way and restricted
+#output to SVG — to minimize things and to make it work. HTML output should work
+#on iOS5, but last I checked Apple changed something on iOS6 that I couldn’t
+#track down for lack of devices." This is interesting, because eLyXer currently
+#restricts output to HTML+CSS rather than CSS. Food for future thought!
+#
+#    <script type="text/x-mathjax-config">
+#    MathJax.Hub.Config({
+#    jax: ["input/TeX","input/MathML","output/SVG"],
+#    extensions: ["tex2jax.js","mml2jax.js","MathEvents.js"],
+#    TeX: {
+#    extensions: ["noErrors.js","noUndefined.js","autoload-all.js"]
+#    },
+#    MathMenu: {
+#    showRenderer: false
+#    },
+#    menuSettings: {
+#    zoom: "Click"
+#    },
+#    messageStyle: "none"
+#    });
+#    </script>
+#    <script type="text/javascript" src="../mathjax/MathJax.js"> </script>
+
+#FUXME: We need a new option "--platform" accepting either "ebook" or "website"
+#(defaulting to "ebook"). When publishing to websites, we'll want to adjust
+#behavior as follows:
+#
+#* If using MathJax locally, prefer "woff" fonts to all others.
+
+#FUXME: Patch "elyxer" if <= 1.2.5 with the correct Google Charts image *IF AND
+#ONLY IF* such option is enabled. This will require copying "elyxer" to
+#${dirname_trg} if such file has not already been copied and patching it there
+#-- ideally, with a simple "sed -ie" command. The culprit is:
+#
+#     u'googlecharts':u'http://chart.googleapis.com/chart?cht=tx&chl=', 
+#
+#...which should instead read:
+#
+#     u'googlecharts':u'http://chart.apis.google.com/chart?cht=tx&chl=', 
+#FUXME: After successfully patching such issue, file a bug on eLyXer's tracker.
+
+#FUXME: Remove inessential files from copied MathJax subdirectories. See:
+#https://github.com/mathjax/MathJax-docs/wiki/Guide%3A-reducing-size-of-a-mathjax-installation
+
+            # Trim the copy of MathJax in such target directory by removing
+            # inapplicable files and subdirectories. For further details, see
+                #FUXME: O.K.; here's where we perform MathJax compression. There
+                #are two approaches: (a) copying over *ONLY* the set of required
+                #files (whitelist approach) or (b) copying over everything and
+                #then selectively removing unwanted files (blacklist approach).
+                #While the former is clearly more efficient, the latter is
+                #considerably more future-proof. After all, we can be reasonably
+                #certain that we'll never need a certain file or subdirectory --
+                #but can we ever be sure of what exactly we will need? Right.
+                #
+                #So let's go with approach (b), above. This implies we retain
+                #the current recursive copy and then perform recursive remove
+                #operations resembling:
+                #
+                #    find "${dirname_trg}" -name ... -delete
+                #
+                #Fairly sure I implemented similar functionality in a recent
+                #ebuild. Ah, yes... Powerline. Relevant lines are:
+                #
+                #    # Remove all non-Python files from the original tree.
+                #    find  powerline/bindings -type f -not -name '*.py' -delete
+                #
+                #    # Remove all Python files from the copied tree, for safety.
+                #    find "${POWERLINE_SRC_DIR}" -type f -name '*.py' -delete
+
+
 # ....................{ OPTIONS ~ quality                  }....................
 # Enumeration identifying the intended quality of output content.
 # local quality='high'
