@@ -39,51 +39,34 @@
 #   of both EPUB2 and EPUB3 ebooks (as well generating proper ebook manifests):
 #   https://github.com/IDPF/epubcheck
 
-#FIXME: MathJax 2.3 is *INSANELY* huge, and it's only going to get larger. We
-#desparately need to shrink this even further. Examining "du MathJax", it's
-#clear that SVG output and non-TeX fonts (i.e., so-called web fonts) are yet
-#more space hogs. The offending subdirectories are:
-#
-#* "fonts/HTML-CSS" excluding "./TeX", 13MB. This includes STIX fonts, which
-#  most LaTeX commentators claim to be vastly inferior to TeX fonts. I would
-#  probably concur with such claim, largely due to the fact that the STIX fonts
-#  were designed by a consortium of corporations and governments of varying
-#  budgets and motivations. Needless to say, the result is a bit hodgepodge.
-#  This StackExchange confirms this suspicion:
-#  http://meta.math.stackexchange.com/questions/11456/use-tex-fonts-by-default-even-if-stix-fonts-are-installed
-#  Yup! Unsurprisingly, the STIX fonts are fairly terrible.
-#* "jax/output/SVG", also 13MB.
-#
-#Altogether, excising such subdirectories nets us 26MB, which is probably
-#essential. After doing so, consider also adopting the following MathJax
-#configuration, courtesy a great GoogleGroups thread on slimming MathJax:
-#https://groups.google.com/forum/#!topic/mathjax-users/2SrqHRd9tmA
-#
-#    <script type="text/x-mathjax-config">
-#      MathJax.Hub.Config({
-#        extensions: ["tex2jax.js"],
-#        menuSettings: {zoom: "Double-Click", zscale: "300%"},
-#        jax: ["input/TeX","output/HTML-CSS"],
-#        MathMenu: {showRenderer: false},
-#        "HTML-CSS": {
-#            availableFonts: ["TeX"],
-#            preferredFont: "TeX",
-#            imageFont: null
-#        }
-#      });
-#    </script>
-#
-#I'm not sure we require *ALL* of it, but the salient subsection appears to span
-#from "jax:" to the last curly brace. I've confirmed the "HTML-CSS" fragment, at
-#least, to be the canonical means of acheiving that effect. Yay!
-#
-#To enable such configuration, I'm afraid we'll have to obliterate eLyXer's
-#default MathJax configuration and replace with it our own. Small price to pay,
-#however!
-
 #FIXME: Inform the user after completion of all target files and directories the
 #user will need to save to retain a complete, working HTML document. This should
 #include images as well as CSS and Javascript.
+#FIXME: Actually, a better solution would be to provide a new pair of options
+#"--archive" and "--no-archive" (defaulting to "--archive") producing a
+#compressed archive in the target directory containing all relevant files for
+#production. Use a safe blacklist-oriented approach as follows:
+#
+#* Recursively copy all files and subdirectories in "${dirname_trg}" to a
+#  temporary subdirectory of "${dirname_trg}", to guarantee writability -- say,
+#  "${dirname_trg}/archive".
+#* Remove all LyX-specific files from "${dirname_trg}/archive". Happily, these
+#  are easily identifiable as all *FILES* (not directories) matching glob
+#  <->lyxpreview*(.).
+#
+#For efficiency, perform such operations in a backgrounded subshell.
+#
+#If "${dirname_trg}/archive" already exists, simply print a nonfatal warning and
+#do nothing. (Too dangerous, otherwise.)
+#FIXME: Actually, a more useful option would probably be "--bundle-dir" (or some
+#such) accepting a dirname defaulting to "${dirname_trg}/bundle". No need for
+#compression and/or archival; creating a directory should suffice.
+#FIXME: In keeping with eLyXer option nomenclature, how about
+#"--destdirectoryslim"? *shrug* Bah! That's terrible. How about
+#"--production-dir"? That's fairly explicit, yes?
+#FIXME: Naturally, inform the user of such directory after completion.
+#FIXME: To improve output readability, colorize output.
+
 #FIXME: The "README.md" should explicitly document all of the nifty things we do
 #here. Too many to exhaustively list here, so grep below!
 
@@ -127,6 +110,12 @@ the following elicker-specific options:
                               EPUB3-conformant ebooks (e.g., KF8)
          --quality low        output low-quality content, intended for
                               publication as EPUB2- or MOBI-conformant ebooks
+
+      --production-dir DIR    copy all output content to directory DIR
+                             [consider specifying this option when running
+                              elicker with LyX''s "View (Other Formats)->HTML"
+                              menu item, to make production-quality directories
+                              unpolluted by temporary LyX and LaTeX files]
 
 eLyXer options and arguments are as follows:
 '
@@ -324,6 +313,13 @@ if (( ${+elicker_options[--quality]} )) {
 [[ "${quality}" == ('high'|'low') ]] || die\
     "Quality \"${quality}\" unrecognized."
 
+# ....................{ OPTIONS ~ production-dir           }....................
+# Ancillary target directory containing no temporary LyX or LateX files.
+local dirname_trg_production
+
+#FIXME: Implement me!
+#--production-dir
+
 # ....................{ OPTIONS ~ print                    }....................
 # Inform the user of all elicker-specific options.
 print_message "Parsed elicker options:
@@ -376,6 +372,7 @@ Consider renaming such file to \"lyx.css\" to avoid this warning in the future."
     # default remote CSS file.
     if [[ -f "${filename_src_css}" ]] {
         # Copy such file to the target directory.
+        print_message "Installing local eLyXer CSS."
         cp -v "${filename_src_css}" "${dirname_trg}"
 
         # Pass the basename of such file to eLyXer, instructing eLyXer to always
@@ -387,101 +384,142 @@ Consider renaming such file to \"lyx.css\" to avoid this warning in the future."
 # If the caller passed no math display options, sanely default such options.
 if (( ${@[(ie)--mathjax]} > ${#} &&\
       ${@[(ie)--googlecharts]} > ${#} )) {
-    # If producing low-quality ebooks, display math as bitmap images through
-    # Google Charts.
+    # If outputting with low quality, display math with compressed bitmap images
+    # via Google Charts.
     if [[ "${quality}" == 'low' ]] {
         argv+=( --googlecharts )
-    # Else, display math dynamically through MathJax.
+    # Else, display math with vector-based TeX fonts via MathJax.
     } elif {
-        local basename_mathjax='MathJax'
-        local\
-            dirname_src_mathjax="${dirname_src}/${basename_mathjax}"\
-            dirname_trg_mathjax="${dirname_trg}/${basename_mathjax}"
-
         # If a source MathJax subdirectory exists, enable local MathJax usage.
-        if [[ -d "${dirname_src_mathjax}" ]] {
-            # If a target MathJax subdirectory already exists, inform the caller
-            # that such subdirectory will be used as is.
-            if [[ -d "${dirname_trg_mathjax}" ]] {
-                print_warning\
-                    "Reusing target temporary MathJax directory \"${dirname_trg_mathjax}\"."
-            # Else, recursively copy the source MathJax subdirectory to the
-            # target directory and remove all optional files and subdirectories
-            # from such copy. This is critical, as the uncompressed MathJax
-            # distribution rapidly approaches 100MB in size.  For further
-            # details, see the quasi-official guide to "reducing the size of a
-            # mathjax installation":
-            # https://github.com/mathjax/MathJax-docs/wiki/Guide%3A-reducing-size-of-a-mathjax-installation
-            #
-            # Note that this is a "blacklist" approach, explicitly copying all
-            # possible paths and then removing unwanted paths from such copy.
-            # The alternative is a "whitelist" approach, explicitly copying only
-            # the required paths and hence requiring no subsequent removal.
-            #
-            # While the latter is clearly more efficient, the former is
-            # considerably more future-proof. We can be reasonably sure that all
-            # currently optional files and subdirectories are likely to remain
-            # optional regardless of future changes to MathJax structure and
-            # content. We cannot, however, be reasonably sure that such changes
-            # will *NOT* introduce requisite files or subdirectories which our
-            # static implementation here would neglect to copy over. Hence, we
-            # adopt the "blacklist" approach.
-            } else {
-                cp -rv "${dirname_src_mathjax}" "${dirname_trg}"
-
-                # Remove MathJax paths guaranteed to be optional under all
-                # custom MathJax configurations, including:
-                #
-                # * Documentation (e.g., "docs/", "LICENSE", "README*").
-                # * Unit tests (e.g., "test/").
-                # * Ancillary files (e.g., ".gitignore", "bower.json").
-                rm -rf "${dirname_trg}"/{docs,test,unpacked}
-                rm -f "${dirname_trg}"/{LICENSE,README*,.gitignore,bower.json}
-
-                # Remove all stock MathJax configurations except "MMLorHTML.js",
-                # explicitly referenced by eLyXer output. zsh to the rescue!
-                rm -rf "${dirname_trg}"/config/*~*/MMLorHTML.js
-
-                # Remove all image fonts. This is safe *ONLY* under custom
-                # MathJax configurations setting "imageFont: null". Fortunately,
-                # eLyXer guarantees such setting when using MathJax locally --
-                # which, of course, this conditional ensures we are.
-                rm -rf "${dirname_trg}"/fonts/HTML-CSS/TeX/png
-
-                # Remove all non-TeX input options (e.g., MathML).
-                rm -rf "${dirname_trg}"/jax/input~*/TeX
-
-                # If tailoring output for ebooks, remove the following fonts
-                # unlikely to ever be supported by ebook readers:
-                #
-                # * Starting with "MathJax_Win", Windows-specific fonts.
-                # * In subdirectories "eot/", Internet Explorer-specific fonts.
-                # * In subdirectories "svg/", Scalable Vector Graphics "fonts."
-                #   Ebook support for SVG has always been spotty at best, and
-                #   are unlikely to benefit from glyph-specific SVGs intended to
-                #   be rendered inline text. Note this does *NOT* remove SVG as
-                #   an output option, as MathJax renders SVG output separately.
-                #   The following article's "Slimming down mathjax" section
-                #   corroborates such choice:
-                #   http://boolesrings.org/krautzberger/2011/10/17/epub-mathjax-and-the-ipad-another-attempt
-                #
-                # The following fonts should generally *NOT* be removed:
-                #
-                # * In subdirectories "woff", W3C-standardized web fonts
-                #   explicitly supported by the EPUB3 standard.
-                if [[ "${platform}" == 'ebook' ]] {
-                    rm -rf "${dirname_trg}"/fonts/HTML-CSS/**/{eot,svg}
-                    rm -f "${dirname_trg}"/fonts/HTML-CSS/**/MathJax_Win*
-                }
-            }
-
-            # Pass the basename of such directory to eLyXer, instructing eLyXer
-            # to always find such directory in the same directory as the output
-            # HTML file.
-            argv+=( --mathjax "${basename_mathjax}" )
+        if [[ -d "${dirname_src}/MathJax" ]] {
+            # Pass the basename of such directory to eLyXer, permitting the
+            # output HTML file and such directory to be subsequently moved on
+            # the filesystem without breaking such HTML.
+            argv+=( --mathjax 'MathJax' )
         # Else, enable remote MathJax usage.
         } else {
             argv+=( --mathjax remote )
+        }
+    }
+}
+
+# If option "--mathjax" is enabled...
+integer mathjax_index="${@[(ie)--mathjax]}"
+if ((   mathjax_index <= ${#} )) {
+    # Source MathJax directory, either relative or absolute, or "remote".
+    local dirname_src_mathjax="${@[mathjax_index + 1]}"
+
+    # If such directory is local, customize local MathJax usage.
+    if [[ "${dirname_src_mathjax}" != 'remote' ]] {
+        # If such directory is relative (i.e., is *NOT* prefixed by "/"), assume
+        # such directory to be relative to the passed source directory.
+        [[ "${dirname_src_mathjax}" == '/'* ]] ||
+            dirname_src_mathjax="${dirname_src}/${dirname_src_mathjax}"
+
+        # If such directory does *NOT* exist, fail.
+        [[ -d "${dirname_src_mathjax}" ]] || die\
+            "\"${dirname_src_mathjax}/\" not found."
+
+        # Target MathJax directory, guaranteed to be absolute.
+        local dirname_trg_mathjax="${dirname_trg}/${dirname_src_mathjax:t}"
+
+        # If such target directory already exists, use such directory as is without
+        # recopying for efficiency and inform the caller.
+        if [[ -d "${dirname_trg_mathjax}" ]] {
+            print_warning\
+                "Reusing target temporary MathJax directory \"${dirname_trg_mathjax}\"."
+        # Else, recursively copy the source MathJax subdirectory to the
+        # target directory and remove all optional files and subdirectories
+        # from such copy. This is critical, as the uncompressed MathJax
+        # distribution rapidly approaches 100MB in size.  For further
+        # details, see the quasi-official guide to "reducing the size of a
+        # mathjax installation":
+        # https://github.com/mathjax/MathJax-docs/wiki/Guide%3A-reducing-size-of-a-mathjax-installation
+        #
+        # Note that this is a "blacklist" approach, explicitly copying all
+        # possible paths and then removing unwanted paths from such copy.
+        # The alternative is a "whitelist" approach, explicitly copying only
+        # the required paths and hence requiring no subsequent removal.
+        #
+        # While the latter is clearly more efficient, the former is
+        # considerably more future-proof. We can be reasonably sure that all
+        # currently optional files and subdirectories are likely to remain
+        # optional regardless of future changes to MathJax structure and
+        # content. We cannot, however, be reasonably sure that such changes
+        # will *NOT* introduce requisite files or subdirectories which our
+        # static implementation here would neglect to copy over. Hence, we
+        # adopt the "blacklist" approach.
+        } else {
+            print_message "Installing local MathJax."
+            cp -rv "${dirname_src_mathjax}" "${dirname_trg}"
+
+            # Remove MathJax paths guaranteed to be optional under all
+            # custom MathJax configurations, including:
+            #
+            # * Documentation (e.g., "docs/", "LICENSE", "README*").
+            # * Unit tests (e.g., "test/").
+            # * Ancillary files (e.g., ".gitignore", "bower.json").
+            print_message "Slimlining local MathJax."
+            rm -rfv "${dirname_trg}"/{docs,test,unpacked}
+            rm -fv "${dirname_trg}"/{LICENSE,README*,.gitignore,bower.json}
+
+            # Remove all stock MathJax configurations except "MMLorHTML.js",
+            # explicitly referenced by eLyXer output. zsh to the rescue!
+            rm -rfv "${dirname_trg}"/config/*~*/MMLorHTML.js
+
+            # Remove all image fonts. This is safe *ONLY* under custom
+            # MathJax configurations setting "imageFont: null". Fortunately,
+            # eLyXer guarantees such setting when using MathJax locally --
+            # which, of course, this conditional ensures we are.
+            rm -rfv "${dirname_trg}"/fonts/HTML-CSS/TeX/png
+
+            # Remove all non-TeX input options (e.g., MathML).
+            rm -rfv "${dirname_trg}"/jax/input~*/TeX
+
+            # If tailoring output for ebooks, remove the following fonts
+            # unlikely to ever be supported by ebook readers:
+            #
+            # * Starting with "MathJax_Win", Windows-specific fonts.
+            # * In subdirectories "eot/", Internet Explorer-specific fonts.
+            # * In subdirectories "svg/", Scalable Vector Graphics "fonts."
+            #   Ebook support for SVG has always been spotty at best, and
+            #   are unlikely to benefit from glyph-specific SVGs intended to
+            #   be rendered inline text. Note this does *NOT* remove SVG as
+            #   an output option, as MathJax renders SVG output separately.
+            #   The following article's "Slimming down mathjax" section
+            #   corroborates such choice:
+            #   http://boolesrings.org/krautzberger/2011/10/17/epub-mathjax-and-the-ipad-another-attempt
+            # * In all subdirectories of "fonts/HTML-CSS" excluding
+            #   "fonts/HTML-CSS/TeX", non-TeX math fonts including the
+            #   recently developed STIX fonts. Since the LaTeX community
+            #   commonly considers TeX math fonts aesthetically superior to
+            #   non-TeX math fonts and in particular the STIX fonts *AND*
+            #   since TeX math fonts provide all necessary glyphs in all
+            #   necessary font formats *AND* since numerous older browsers
+            #   (e.g., Safari, WebKit) suffer discernable bugs when using the
+            #   STIX fonts, there exists no to little incentive to retain
+            #   non-TeX math fonts. Note this requires MathJax to be configured
+            #   to use only TeX math fonts, below. For further opinionated
+            #   details, see:
+            #   http://meta.math.stackexchange.com/questions/11456/use-tex-fonts-by-default-even-if-stix-fonts-are-installed
+            #
+            # The following fonts should generally *NOT* be removed:
+            #
+            # * In subdirectories "woff", W3C-standardized web fonts
+            #   explicitly supported by the EPUB3 standard.
+            if [[ "${platform}" == 'ebook' ]] {
+                rm -rfv "${dirname_trg}/fonts/HTML-CSS/"*/~*/TeX
+                rm -rfv "${dirname_trg}/fonts/HTML-CSS/"**/{eot,svg}
+                rm -fv "${dirname_trg}/fonts/HTML-CSS/"**/MathJax_Win*
+
+                # Also remove the SVG output option. Such option consumes a
+                # considerable amount of space, while contributing comparatively
+                # little: the HTML-CSS output option should suffice for EPUB3-
+                # and hence MathJax-capable ebook readers. Note this requires
+                # MathJax to be configured to use only the HTML-CSS output
+                # option, below.
+                rm -rfv "${dirname_trg}/jax/output/SVG"
+            }
         }
     }
 }
@@ -494,10 +532,10 @@ command elyxer "${@}"\
     "${filename_trg_html_old}"
 
 # ....................{ POST-PROCESS                       }....................
-print_message "Post-processing \"${filename_trg_html}\"..."
+print_message "Post-processing \"${filename_trg_html}\"."
 
 # Copy such temporary target file to the target file LyX expects.
-cp "${filename_trg_html_old}" "${filename_trg_html}"
+cp -v "${filename_trg_html_old}" "${filename_trg_html}"
 
 # Load zsh module "zsh/mapfile", providing both read and write access to text
 # file contents by map global ${mapfile}, only for the exact duration of such
@@ -513,20 +551,20 @@ zmodload zsh/mapfile
     # facilities of zsh module "zsh/pcre" to do so. It should be noted that
     # XMLStarlet is a preferable means of modifying XML. Due to laziness and a
     # distate for additional dependencies, however, we take the hard way.
-    if (( ${@[(ie)--mathjax]} <= ${#} )) {
-        local mathjax_config mathjax_style
-        print_message "Configuring sane MathJax defaults..."
+    if (( mathjax_index <= ${#} )) {
+        local mathjax_preamble mathjax_config mathjax_style
+        print_message 'Configuring sane MathJax defaults.'
 
-        # Inline MathJax configuration to be inserted into the output HTML file
+        # Inline MathJax startup hooks to be inserted into the output HTML file
         # immediately prior to loading MathJax.
-        local mathjax_config='<script type="text/x-mathjax-config">'
+        mathjax_preamble='<script type="text/x-mathjax-config">'
 
         # By default, MathJax provides no support for optional LaTeX macros
         # /nicefrac (which LyX enables by default) and /xfrac. Add such support
         # by augmenting MathJax's internal TeX parser to recognize such macro,
         # as documented by:
         # https://github.com/mathjax/mathjax-docs/wiki/Beveled-fraction-like-sfrac,-nicefrac-bfrac
-        mathjax_config+='
+        mathjax_preamble+='
   MathJax.Hub.Register.StartupHook("TeX Jax Ready", function () {
     var MML = MathJax.ElementJax.mml, TEX = MathJax.InputJax.TeX;
     TEX.Definitions.macros.nicefrac = "bevelledFractionParser";
@@ -540,15 +578,35 @@ zmodload zsh/mapfile
     });
   });'
 
-        # Conclude such configuration.
-        mathjax_config+='
+        # Conclude such hooks.
+        mathjax_preamble+='
 </script>
 '
+
+        # If installing MathJax locally for offline ebook production, configure
+        # MathJax to support our prior removal of MathJax files and directories.
+        if [[ "${dirname_src_mathjax}" != 'remote' &&
+              "${platform}" == 'ebook' ]] {
+            mathjax_config='
+  MathJax.Hub.Config({
+    jax: ["input/TeX", "output/HTML-CSS"],
+    config: ["MMLorHTML.js"],
+    extensions: ["TeX/AMSmath.js", "TeX/AMSsymbols.js"],
+    "HTML-CSS": {
+      availableFonts: ["TeX"],
+      preferredFont: "TeX",
+      imageFont: null
+    }
+  });'
+#   extensions: ["tex2jax.js"],
+#   menuSettings: {zoom: "Double-Click", zscale: "300%"},
+#   MathMenu: {showRenderer: false},
+        }
 
         # Inline MathJax CSS styles to be inserted into the output HTML file
         # immediately after loading MathJax and hence overriding MathJax's
         # default CSS styles.
-        local mathjax_style='
+        mathjax_style='
 <style>'
 
         # By default, MathJax displays math with a foreground grey color. Since
@@ -581,8 +639,18 @@ zmodload zsh/mapfile
         #      src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
         #    </script>
         #
-        # Note that "." matches all characters excluding newlines, here.
-        mathjax_pcre='(<script\s++type="text/javascript"\s++src=".+?MathJax.js[^"]*+">[^<]*+</script>)'
+        # Such regex captures the following groups:
+        #
+        # * ${match[1]}, the opening <script...> tag.
+        # * ${match[2]}, the content of such tag, either a custom MathJax
+        #   configuration if installing MathJax locally or the empty string
+        #   otherwise.
+        # * ${match[3]}, the closing </script> tag.
+        #
+        # Since "." matches all characters excluding newlines by default *AND*
+        # since the matched substring contains newlines, implicitly match
+        # newlines via negated character classes (e.g., "[^<]").
+        mathjax_pcre='(<script\s++type="text/javascript"\s++src=".+?MathJax.js[^"]*+">)([^<]*+)(</script>)'
 
         # Match such substring in such file.
         [[ "${mapfile[${filename_trg_html}]}" =~ "${mathjax_pcre}" ]] || die\
@@ -590,7 +658,7 @@ zmodload zsh/mapfile
 
         # Rewrite such file, embedding such substring unmodified between such
         # changes.
-        mapfile[${filename_trg_html}]="${mapfile[${filename_trg_html}][1,MBEGIN-1]}${mathjax_config}${match[1]}${mathjax_style}${mapfile[${filename_trg_html}][MEND+1,-1]}"
+        mapfile[${filename_trg_html}]="${mapfile[${filename_trg_html}][1,MBEGIN-1]}${mathjax_preamble}${match[1]}${mathjax_config}${match[3]}${mathjax_style}${mapfile[${filename_trg_html}][MEND+1,-1]}"
     }
 
     # Remove all forward references to index and glossary entries from the body
@@ -606,7 +674,7 @@ zmodload zsh/mapfile
     #
     # * <a class="IndexReference" name="entry-Fruit-patterns-Watermelon-spiral-0" href="#index-Fruit-patterns-Watermelon-spiral">↓</a>
     # * <a class="NomenclatureEntry" name="noment-vitalism" href="#nom-vitalism">↓</a>
-    print_message "Removing empty forward references..."
+    print_message 'Removing empty forward references.'
 
     # Original text of such file. For efficiency, iteration below modifies
     # such text "in-place."
@@ -671,7 +739,70 @@ zmodload zsh/mapfile
     zmodload -ui zsh/mapfile
 }
 
+# ....................{ END                                }....................
+print_message 'Finished.'
+
 # --------------------( WASTELANDS                         )--------------------
+#FUXME: MathJax 2.3 is *INSANELY* huge, and it's only going to get larger. We
+#desparately need to shrink this even further. Examining "du MathJax", it's
+#clear that SVG output and non-TeX fonts (i.e., so-called web fonts) are yet
+#more space hogs. The offending subdirectories are:
+#
+#* "fonts/HTML-CSS" excluding "./TeX", 13MB. This includes STIX fonts, which
+#  most LaTeX commentators claim to be vastly inferior to TeX fonts. I would
+#  probably concur with such claim, largely due to the fact that the STIX fonts
+#  were designed by a consortium of corporations and governments of varying
+#  budgets and motivations. Needless to say, the result is a bit hodgepodge.
+#  This StackExchange confirms this suspicion:
+#  http://meta.math.stackexchange.com/questions/11456/use-tex-fonts-by-default-even-if-stix-fonts-are-installed
+#  Yup! Unsurprisingly, the STIX fonts are fairly terrible.
+#* "jax/output/SVG", also 13MB.
+#
+#Altogether, excising such subdirectories nets us 26MB, which is probably
+#essential. After doing so, consider also adopting the following MathJax
+#configuration, courtesy a great GoogleGroups thread on slimming MathJax:
+#https://groups.google.com/forum/#!topic/mathjax-users/2SrqHRd9tmA
+#
+#    <script type="text/x-mathjax-config">
+#      MathJax.Hub.Config({
+#        extensions: ["tex2jax.js"],
+#        menuSettings: {zoom: "Double-Click", zscale: "300%"},
+#        jax: ["input/TeX","output/HTML-CSS"],
+#        MathMenu: {showRenderer: false},
+#        "HTML-CSS": {
+#            availableFonts: ["TeX"],
+#            preferredFont: "TeX",
+#            imageFont: null
+#        }
+#      });
+#    </script>
+#
+#I'm not sure we require *ALL* of it, but the salient subsection appears to span
+#from "jax:" to the last curly brace. I've confirmed the "HTML-CSS" fragment, at
+#least, to be the canonical means of acheiving that effect. Yay!
+#
+#To enable such configuration, I'm afraid we'll have to obliterate eLyXer's
+#default MathJax configuration and replace with it our own. Small price to pay,
+#however!
+
+    # # Nonzero if local MathJax usage is enabled or zero otherwise.
+    # integer is_mathjax_local=0
+
+    #     # Inform subsequent logic of local MathJax usage.
+    #     is_mathjax_local=1
+
+# If option "--mathjax" is set to any value other than "remote", customize local
+# MathJax usage.
+
+            # Pass the basename of such directory to eLyXer, instructing eLyXer
+            # to always find such directory in the same directory as the output
+            # HTML file.
+        #     argv+=( --mathjax "${basename_mathjax}" )
+        # # Else, enable remote MathJax usage.
+        # } else {
+        #     argv+=( --mathjax remote )
+        # }
+
                 # * "svg", purportedly required under old iOS iterations. (This
                 #   should probably be verified!)
 #FUXME: We need a new option "--platform" accepting either "ebook" or "website"
