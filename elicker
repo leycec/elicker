@@ -39,33 +39,12 @@
 #   of both EPUB2 and EPUB3 ebooks (as well generating proper ebook manifests):
 #   https://github.com/IDPF/epubcheck
 
-#FIXME: Inform the user after completion of all target files and directories the
-#user will need to save to retain a complete, working HTML document. This should
-#include images as well as CSS and Javascript.
-#FIXME: Actually, a better solution would be to provide a new pair of options
-#"--archive" and "--no-archive" (defaulting to "--archive") producing a
-#compressed archive in the target directory containing all relevant files for
-#production. Use a safe blacklist-oriented approach as follows:
-#
-#* Recursively copy all files and subdirectories in "${dirname_trg}" to a
-#  temporary subdirectory of "${dirname_trg}", to guarantee writability -- say,
-#  "${dirname_trg}/archive".
-#* Remove all LyX-specific files from "${dirname_trg}/archive". Happily, these
-#  are easily identifiable as all *FILES* (not directories) matching glob
-#  <->lyxpreview*(.).
-#
-#For efficiency, perform such operations in a backgrounded subshell.
-#
-#If "${dirname_trg}/archive" already exists, simply print a nonfatal warning and
-#do nothing. (Too dangerous, otherwise.)
-#FIXME: Actually, a more useful option would probably be "--bundle-dir" (or some
-#such) accepting a dirname defaulting to "${dirname_trg}/bundle". No need for
-#compression and/or archival; creating a directory should suffice.
-#FIXME: In keeping with eLyXer option nomenclature, how about
-#"--destdirectoryslim"? *shrug* Bah! That's terrible. How about
-#"--production-dir"? That's fairly explicit, yes?
-#FIXME: Naturally, inform the user of such directory after completion.
+#FIXME: Before implementing option "--fork", research how to safely recursively
+#remove directories in non-interactive shell scripts.
+#FIXME: Minify locally copied CSS files. (Not required for MathJax, of course.)
 #FIXME: To improve output readability, colorize output.
+#FIXME: Excise everything in the "WASTELANDS" prior to the first release. "Aww,
+#shucks."
 
 #FIXME: The "README.md" should explicitly document all of the nifty things we do
 #here. Too many to exhaustively list here, so grep below!
@@ -95,6 +74,14 @@ from input LyX documents to output XHTML files, specify such title as above.
 elicker supports all options and arguments supported by eLyXer, as well as
 the following elicker-specific options:
 
+      --clean                 remove temporary paths from the target directory
+                             [by default, elicker preserves such paths without
+                              modification]
+
+      --force                 always overwrite target paths that already exist
+                             [by default, elicker preserves such paths without
+                              modification]
+
       --platform PLATFORM     output content intended for the specified type of
                               publication PLATFORM, either "ebook" (the default)
                               or "website": e.g.,
@@ -111,12 +98,6 @@ the following elicker-specific options:
          --quality low        output low-quality content, intended for
                               publication as EPUB2- or MOBI-conformant ebooks
 
-      --production-dir DIR    copy all output content to directory DIR
-                             [consider specifying this option when running
-                              elicker with LyX''s "View (Other Formats)->HTML"
-                              menu item, to make production-quality directories
-                              unpolluted by temporary LyX and LaTeX files]
-
 eLyXer options and arguments are as follows:
 '
 
@@ -124,7 +105,7 @@ eLyXer options and arguments are as follows:
 # If the current zsh version is less than such version, terminate with failure.
 autoload -U is-at-least
 is-at-least "${ELICKER_ZSH_VERSION_REQUIRED}" || {
-    print "elicker: installed zsh ${ZSH_VERSION} < required zsh ${ELICKER_ZSH_VERSION_REQUIRED}" 1>&2
+    print "elicker: zsh version ${ZSH_VERSION} less than required version ${ELICKER_ZSH_VERSION_REQUIRED}" 1>&2
     exit 1
 }
 
@@ -140,6 +121,7 @@ autoload throw catch
 # Load core zsh modules.
 zmodload zsh/pcre zsh/parameter
 
+# ....................{ HELPERS ~ output                   }....................
 # Print the passed message to standard output.
 function print_message() {
     print "elicker: ${*}"
@@ -162,8 +144,43 @@ function die() {
 function die_with_help() {
     print_warning "${*}"$'\n\n'"${ELICKER_HELP}"
     command elyxer --help 1>&2
-    
     throw elicker_exception
+}
+
+# ....................{ HELPERS ~ paths                    }....................
+# Safely recursively remove the passed directory. If such directory fails any of
+# the following conditions, terminate this script rather than attempt to remove
+# such path:
+#
+# * Such directory does not exist.
+# * Such directory is relative rather than absolute.
+# * Such directory contains relative path components (i.e., "./", "../").
+# * Such directory resides in a system directory (e.g., "/etc", "/usr").
+# * Such directory is a user's home directory (e.g., "/home/leycec").
+function remove_dir() {
+    # Validate sanity.
+    (( # == 1 )) || die 'Expected one dirname.'
+    local dirname="${1}"
+    [[ -d "${dirname}" ]] || die "\"${dirname}\" not found or not a directory."
+    [[ "${dirname}" == '/'* ]] || die "\"${dirname}\" not an absolute path."
+    [[ "${dirname}" != *('/.'|'/..')('/'*|) ]] || die\
+        '"'${dirname}'" contains relative path components (i.e., "./", "../").'
+
+    # To simplify subsequent validation, canonicalize such path now that we're
+    # know such path exists, is a directory, and has no risky components.
+    dirname="$(print -r -- "${dirname}"(:A))"
+
+    # Validation continues.
+    [[ "${dirname}" != '/'('bin'|'boot'|'dev'|'etc'|'opt'|'proc'|'root'|'sbin'|'sys'|'usr'|'lib'[^/]#)('/'*|) ]] || die\
+        '"'${dirname}'" resides in a system directory (e.g., "/etc", "/usr").'
+    [[ "${dirname}" != '/home'('/'[^/]##|)('/'|) ]] || die\
+        '"'${dirname}'" is a user''s home directory.'
+#   's:^((\.?\*+/+)+.*|(/+\.?\*+)+.*|[\.\*/]+|.*/\.\*+)$::g')'
+
+    # Recursively remove such directory. To prevent glob-reserved characters in
+    # such path from being interpreted as a glob, double-quote such path.
+    print_warning 'Removing directory \"${dirname}\".'
+    #rm -rf -- "${dirname}"
 }
 
 # ....................{ ELYXER                             }....................
@@ -184,11 +201,17 @@ Consider installing at least eLyXer ${ELICKER_ELYXER_VERSION_RECOMMENDED}."
 
 # If the current eLyXer version is less than recommended, print a warning.
 is-at-least "${ELICKER_ELYXER_VERSION_RECOMMENDED}" "${elyxer_version}" ||
-    print_warning "elicker: installed elyxer ${elyxer_version} < recommended zsh ${ELICKER_ELYXER_VERSION_RECOMMENDED}"
+    print_warning "eLyXer version ${elyxer_version} less than recommended ${ELICKER_ELYXER_VERSION_RECOMMENDED}."
+
+# If the current caller is effectively the superuser, terminate this script.
+# We should *NEVER* be run as root or anyone resembling root.
+(( EUID != 0 )) || die\
+    'Expected non-root user. (Please: do not run elicker as root.)'
 
 # ....................{ HELP                               }....................
 # Validate sanity.
-(( # )) || die_with_help 'Expected at least one argument.'
+(( # )) || die_with_help\
+    'Expected at least one command-line option or argument.'
 
 # If the caller passed a help-related argument (e.g., "--help"), pass all such
 # arguments to "elyxer" as is without requiring the caller to have passed
@@ -213,7 +236,7 @@ if (( ${@[(i)--(help|lyxformat|version)]} <= ${#} )) {
     exit 0
 }
 
-# ....................{ CLI                                }....................
+# ....................{ ARGUMENTS                          }....................
 # If the caller passed fewer than the required number of arguments, print the
 # elicker help to standard error and terminate with failure.
 (( # >= 3 )) || die_with_help\
@@ -283,9 +306,26 @@ typeset -A elicker_options
 #   "--help" into map key '-h' rather than '--help'). By default, "="-prefixed
 #   substrings denote the target list or map name to parse such option into.
 # * "-A", parsing passed options into the above map.
-zparseopts -M -D -E -A elicker_options -- -platform: -quality: ||
-    die_with_help 'Invalid command-line argument(s).'
+zparseopts -M -D -E -A elicker_options --\
+    -clean \
+    -force \
+    -platform: \
+    -quality: \
+    || die_with_help 'Invalid command-line argument(s).'
 #print_message "elicker_options: ${(kv@)elicker_options}"
+
+# ....................{ OPTIONS ~ force                     }....................
+# Enumeration identifying the intended platform of output content.
+local platform='ebook'
+
+# If the caller passed the "--platform" option, localize such option.
+if (( ${+elicker_options[--platform]} )) {
+    platform="${elicker_options[--platform]}"
+}
+
+# Validate such option.
+[[ "${platform}" == ('ebook'|'website') ]] || die\
+    "Platform \"${platform}\" unrecognized."
 
 # ....................{ OPTIONS ~ platform                  }....................
 # Enumeration identifying the intended platform of output content.
@@ -348,36 +388,175 @@ if (( ${@[(ie)--imageformat]} > ${#} )) {
     argv+=( --imageformat '.jpg' )
 }
 
+# ....................{ ELYXER ~ css                       }....................
 # If the caller passed no "--css" option, attempt to find a local CSS file for
 # use in the output HTML file.
 if (( ${@[(ie)--css]} > ${#} )) {
     # If the canonical CSS file for eLyXer does *NOT* exist in the source
-    # directory but *SOME* CSS file does, arbitrarily prefer the first such
-    # file. In such case, print a warning as the user may not be expecting this.
+    # directory but some CSS file does, arbitrarily prefer the first such file.
+    # In such case, print a warning as the user may not be expecting this.
     local filename_src_css="${dirname_src}/lyx.css"
     if [[ ! -f "${filename_src_css}" ]] {
         typeset -a filenames_src_css
         filenames_src_css=( "${dirname_src}/"*.css )
 
-        # If such a file exists, prefer the first such file.
         if (( ${#filenames_src_css} )) {
             filename_src_css="${filenames_src_css[1]}"
             print_warning\
-                "Defaulting to local CSS file \""${filename_src_css}"\".
+                "Defaulting to source CSS file \""${filename_src_css}"\".
 Consider renaming such file to \"lyx.css\" to avoid this warning in the future."
         }
     }
 
-    # If some such file exists, instruct eLyXer to use such file in lieu of its
-    # default remote CSS file.
+    # If some such file exists, instruct eLyXer to access the basename of such
+    # file (and hence in the same directory as that of the target HTML file) in
+    # lieu of the default remote CSS usage.
     if [[ -f "${filename_src_css}" ]] {
-        # Copy such file to the target directory.
-        print_message "Installing local eLyXer CSS."
-        cp -v "${filename_src_css}" "${dirname_trg}"
-
-        # Pass the basename of such file to eLyXer, instructing eLyXer to always
-        # find such file in the same directory as the output HTML file.
         argv+=( --css "${filename_src_css:t}" )
+    }
+}
+
+# If option "--css" is enabled...
+integer css_index="${@[(ie)--css]}"
+if ((   css_index <= ${#} )) {
+    # Source CSS file, either relative or absolute.
+    local filename_src_css="${@[css_index + 1]}"
+
+    # If such file is relative (i.e., is *NOT* prefixed by "/"), assume such
+    # file to be relative to such source directory.
+    [[ "${filename_src_css}" == '/'* ]] ||
+        filename_src_css="${dirname_src}/${filename_src_css}"
+
+    # If such file does *NOT* exist, fail.
+    [[ -f "${filename_src_css}" ]] || die\
+        "\"${filename_src_css}/\" not found or not a file."
+
+    # Target CSS file, guaranteed to be absolute.
+    local filename_trg_css="${filename_trg}/${filename_src_css:t}"
+
+    # If such target file already exists...
+    if [[ -f "${filename_trg_css}" ]] {
+        # ...and its removal is requested, do so safely.
+        if (( ${+elicker_options[--force]} )) {
+            print_message "Removing target CSS."
+            rm -- "${filename_trg_css}"
+        # Else, preserve such file and warn the user.
+        } else {
+            print_warning\
+                "Preserving target CSS file \"${filename_trg_css}\" without modification. (Consider passing \"--force\" to override this.)"
+        }
+    }
+
+    # If such target file no longer exists, copy to such file.
+    if [[ ! -f "${filename_trg_css}" ]] {
+        print_message "Copying target CSS."
+        cp -v -- "${filename_src_css}" "${dirname_trg}"
+    }
+}
+
+# ....................{ ELYXER ~ math                      }....................
+# Recursively copy the source MathJax subdirectory to the target directory and
+# remove all nonessential files and subdirectories from such copy. This is
+# crucial, as the uncompressed MathJax distribution rapidly approaches 100MB in
+# size. For further details, see the quasi-official guide to "reducing the size
+# of a mathjax installation":
+#
+# https://github.com/mathjax/MathJax-docs/wiki/Guide%3A-reducing-size-of-a-mathjax-installation
+#
+# Note that this is a "blacklist" approach, explicitly copying all possible
+# paths and then removing unwanted paths from such copy.  The alternative is a
+# "whitelist" approach, explicitly copying only the required paths and hence
+# requiring no subsequent removal.
+#
+# While the latter is clearly more efficient, the former is considerably more
+# future-proof. We can be reasonably sure that all currently optional files and
+# subdirectories are likely to remain optional regardless of future changes to
+# MathJax structure and content. We cannot, however, be reasonably sure that
+# such changes will *NOT* introduce requisite files or subdirectories which our
+# static implementation here would neglect to copy over. Hence, we adopt the
+# "blacklist" approach.
+#
+# For readability, aggregate all such MathJax path handling to this function.
+function install_mathjax() {
+    # Validate sanity.
+    (( # == 0 )) || die "copy_and_trim_mathjax() expected no arguments."
+    (( ${+dirname_src_mathjax} + ${+dirname_trg_mathjax} == 2 )) || die\
+        'Strings ${dirname_src_mathjax} and/or ${dirname_trg_mathjax} not set.'
+
+    # Copy MathJax.
+    print_message "Copying target MathJax."
+    cp -r -- "${dirname_src_mathjax}" "${dirname_trg_mathjax}"
+
+    # Remove MathJax paths guaranteed to be optional under all
+    # custom MathJax configurations, including:
+    #
+    # * Documentation (e.g., "docs/", "LICENSE", "README*").
+    # * Unit tests (e.g., "test/").
+    # * Ancillary files (e.g., ".gitignore", "bower.json").
+    #
+    # Such removals explicitly state the paths to be removed and hence are
+    # fundamentally safe -- or, at least safer than removals expanding only
+    # variables (e.g., 'rm -rf -- "${dirname_trg_mathjax}"').
+    print_message "Trimming target MathJax."
+    rm -rf -- "${dirname_trg_mathjax}"/{docs,test,unpacked}
+    rm -f  -- "${dirname_trg_mathjax}"/{LICENSE,README*,.gitignore,bower.json}
+
+    # Remove all stock MathJax configurations except "MMLorHTML.js",
+    # explicitly referenced by eLyXer output. zsh to the rescue!
+    rm -rf -- "${dirname_trg_mathjax}"/config/*~*/MMLorHTML.js
+
+    # Remove all image fonts. This is safe *ONLY* under custom
+    # MathJax configurations setting "imageFont: null". Fortunately,
+    # eLyXer guarantees such setting when using MathJax locally --
+    # which, of course, this conditional ensures we are.
+    rm -rf -- "${dirname_trg_mathjax}"/fonts/HTML-CSS/TeX/png
+
+    # Remove all non-TeX input options (e.g., MathML).
+    rm -rf -- "${dirname_trg_mathjax}"/jax/input~*/TeX
+
+    # If tailoring output for ebooks, remove the following fonts
+    # unlikely to ever be supported by ebook readers:
+    #
+    # * Starting with "MathJax_Win", Windows-specific fonts.
+    # * In subdirectories "eot/", Internet Explorer-specific fonts.
+    # * In subdirectories "svg/", Scalable Vector Graphics "fonts."
+    #   Ebook support for SVG has always been spotty at best, and
+    #   are unlikely to benefit from glyph-specific SVGs intended to
+    #   be rendered inline text. Note this does *NOT* remove SVG as
+    #   an output option, as MathJax renders SVG output separately.
+    #   The following article's "Slimming down mathjax" section
+    #   corroborates such choice:
+    #   http://boolesrings.org/krautzberger/2011/10/17/epub-mathjax-and-the-ipad-another-attempt
+    # * In all subdirectories of "fonts/HTML-CSS" excluding
+    #   "fonts/HTML-CSS/TeX", non-TeX math fonts including the
+    #   recently developed STIX fonts. Since the LaTeX community
+    #   commonly considers TeX math fonts aesthetically superior to
+    #   non-TeX math fonts and in particular the STIX fonts *AND*
+    #   since TeX math fonts provide all necessary glyphs in all
+    #   necessary font formats *AND* since numerous older browsers
+    #   (e.g., Safari, WebKit) suffer discernable bugs when using the
+    #   STIX fonts, there exists no to little incentive to retain
+    #   non-TeX math fonts. Note this requires MathJax to be configured
+    #   to use only TeX math fonts, below. For further opinionated
+    #   details, see:
+    #   http://meta.math.stackexchange.com/questions/11456/use-tex-fonts-by-default-even-if-stix-fonts-are-installed
+    #
+    # The following fonts should generally *NOT* be removed:
+    #
+    # * In subdirectories "woff", W3C-standardized web fonts
+    #   explicitly supported by the EPUB3 standard.
+    if [[ "${platform}" == 'ebook' ]] {
+        rm -rf -- "${dirname_trg_mathjax}/fonts/HTML-CSS/"*/~*/TeX
+        rm -rf -- "${dirname_trg_mathjax}/fonts/HTML-CSS/"**/{eot,svg}
+        rm -f  -- "${dirname_trg_mathjax}/fonts/HTML-CSS/"**/MathJax_Win*
+
+        # Also remove the SVG output option. Such option consumes a
+        # considerable amount of space, while contributing comparatively
+        # little: the HTML-CSS output option should suffice for EPUB3-
+        # and hence MathJax-capable ebook readers. Note this requires
+        # MathJax to be configured to use only the HTML-CSS output
+        # option, below.
+        rm -rf -- "${dirname_trg_mathjax}/jax/output/SVG"
     }
 }
 
@@ -390,12 +569,28 @@ if (( ${@[(ie)--mathjax]} > ${#} &&\
         argv+=( --googlecharts )
     # Else, display math with vector-based TeX fonts via MathJax.
     } elif {
-        # If a source MathJax subdirectory exists, enable local MathJax usage.
-        if [[ -d "${dirname_src}/MathJax" ]] {
-            # Pass the basename of such directory to eLyXer, permitting the
-            # output HTML file and such directory to be subsequently moved on
-            # the filesystem without breaking such HTML.
-            argv+=( --mathjax 'MathJax' )
+        # If the canonical MathJax directory for eLyXer does *NOT* exist in the
+        # source directory but some directory containing the canonical MathJax
+        # file "MathJax.js" does, arbitrarily prefer the first such directory.
+        # In such case, print a warning as the user may not be expecting this.
+        local dirname_src_mathjax="${dirname_src}/MathJax"
+        if [[ ! -d "${dirname_src_mathjax}" ]] {
+            typeset -a filenames_src_mathjax
+            filenames_src_mathjax=( "${dirname_src}/"*/MathJax.js )
+
+            if (( ${#filenames_src_mathjax} )) {
+                dirname_src_mathjax="${filenames_src_mathjax[1]:h}"
+                print_warning\
+                    "Defaulting to source MathJax directory \""${dirname_src_mathjax}"\".
+Consider renaming such directory to \"MathJax\" to avoid this warning in the future."
+            }
+        }
+
+        # If some such directory exists, instruct eLyXer to access the basename
+        # of such directory (and hence in the same directory as that of the
+        # target HTML file) in lieu of the default remote MathJax usage.
+        if [[ -d "${dirname_src_mathjax}" ]] {
+            argv+=( --mathjax "${dirname_src_mathjax:t}" )
         # Else, enable remote MathJax usage.
         } else {
             argv+=( --mathjax remote )
@@ -412,118 +607,38 @@ if ((   mathjax_index <= ${#} )) {
     # If such directory is local, customize local MathJax usage.
     if [[ "${dirname_src_mathjax}" != 'remote' ]] {
         # If such directory is relative (i.e., is *NOT* prefixed by "/"), assume
-        # such directory to be relative to the passed source directory.
+        # such directory to be relative to such source directory.
         [[ "${dirname_src_mathjax}" == '/'* ]] ||
             dirname_src_mathjax="${dirname_src}/${dirname_src_mathjax}"
 
         # If such directory does *NOT* exist, fail.
         [[ -d "${dirname_src_mathjax}" ]] || die\
-            "\"${dirname_src_mathjax}/\" not found."
+            "\"${dirname_src_mathjax}/\" not found or not a directory."
 
         # Target MathJax directory, guaranteed to be absolute.
         local dirname_trg_mathjax="${dirname_trg}/${dirname_src_mathjax:t}"
 
-        # If such target directory already exists, use such directory as is without
-        # recopying for efficiency and inform the caller.
+        # If such target directory already exists...
         if [[ -d "${dirname_trg_mathjax}" ]] {
-            print_warning\
-                "Reusing target temporary MathJax directory \"${dirname_trg_mathjax}\"."
-        # Else, recursively copy the source MathJax subdirectory to the
-        # target directory and remove all optional files and subdirectories
-        # from such copy. This is critical, as the uncompressed MathJax
-        # distribution rapidly approaches 100MB in size.  For further
-        # details, see the quasi-official guide to "reducing the size of a
-        # mathjax installation":
-        # https://github.com/mathjax/MathJax-docs/wiki/Guide%3A-reducing-size-of-a-mathjax-installation
-        #
-        # Note that this is a "blacklist" approach, explicitly copying all
-        # possible paths and then removing unwanted paths from such copy.
-        # The alternative is a "whitelist" approach, explicitly copying only
-        # the required paths and hence requiring no subsequent removal.
-        #
-        # While the latter is clearly more efficient, the former is
-        # considerably more future-proof. We can be reasonably sure that all
-        # currently optional files and subdirectories are likely to remain
-        # optional regardless of future changes to MathJax structure and
-        # content. We cannot, however, be reasonably sure that such changes
-        # will *NOT* introduce requisite files or subdirectories which our
-        # static implementation here would neglect to copy over. Hence, we
-        # adopt the "blacklist" approach.
-        } else {
-            print_message "Installing local MathJax."
-            cp -rv "${dirname_src_mathjax}" "${dirname_trg}"
-
-            # Remove MathJax paths guaranteed to be optional under all
-            # custom MathJax configurations, including:
-            #
-            # * Documentation (e.g., "docs/", "LICENSE", "README*").
-            # * Unit tests (e.g., "test/").
-            # * Ancillary files (e.g., ".gitignore", "bower.json").
-            print_message "Slimlining local MathJax."
-            rm -rfv "${dirname_trg}"/{docs,test,unpacked}
-            rm -fv "${dirname_trg}"/{LICENSE,README*,.gitignore,bower.json}
-
-            # Remove all stock MathJax configurations except "MMLorHTML.js",
-            # explicitly referenced by eLyXer output. zsh to the rescue!
-            rm -rfv "${dirname_trg}"/config/*~*/MMLorHTML.js
-
-            # Remove all image fonts. This is safe *ONLY* under custom
-            # MathJax configurations setting "imageFont: null". Fortunately,
-            # eLyXer guarantees such setting when using MathJax locally --
-            # which, of course, this conditional ensures we are.
-            rm -rfv "${dirname_trg}"/fonts/HTML-CSS/TeX/png
-
-            # Remove all non-TeX input options (e.g., MathML).
-            rm -rfv "${dirname_trg}"/jax/input~*/TeX
-
-            # If tailoring output for ebooks, remove the following fonts
-            # unlikely to ever be supported by ebook readers:
-            #
-            # * Starting with "MathJax_Win", Windows-specific fonts.
-            # * In subdirectories "eot/", Internet Explorer-specific fonts.
-            # * In subdirectories "svg/", Scalable Vector Graphics "fonts."
-            #   Ebook support for SVG has always been spotty at best, and
-            #   are unlikely to benefit from glyph-specific SVGs intended to
-            #   be rendered inline text. Note this does *NOT* remove SVG as
-            #   an output option, as MathJax renders SVG output separately.
-            #   The following article's "Slimming down mathjax" section
-            #   corroborates such choice:
-            #   http://boolesrings.org/krautzberger/2011/10/17/epub-mathjax-and-the-ipad-another-attempt
-            # * In all subdirectories of "fonts/HTML-CSS" excluding
-            #   "fonts/HTML-CSS/TeX", non-TeX math fonts including the
-            #   recently developed STIX fonts. Since the LaTeX community
-            #   commonly considers TeX math fonts aesthetically superior to
-            #   non-TeX math fonts and in particular the STIX fonts *AND*
-            #   since TeX math fonts provide all necessary glyphs in all
-            #   necessary font formats *AND* since numerous older browsers
-            #   (e.g., Safari, WebKit) suffer discernable bugs when using the
-            #   STIX fonts, there exists no to little incentive to retain
-            #   non-TeX math fonts. Note this requires MathJax to be configured
-            #   to use only TeX math fonts, below. For further opinionated
-            #   details, see:
-            #   http://meta.math.stackexchange.com/questions/11456/use-tex-fonts-by-default-even-if-stix-fonts-are-installed
-            #
-            # The following fonts should generally *NOT* be removed:
-            #
-            # * In subdirectories "woff", W3C-standardized web fonts
-            #   explicitly supported by the EPUB3 standard.
-            if [[ "${platform}" == 'ebook' ]] {
-                rm -rfv "${dirname_trg}/fonts/HTML-CSS/"*/~*/TeX
-                rm -rfv "${dirname_trg}/fonts/HTML-CSS/"**/{eot,svg}
-                rm -fv "${dirname_trg}/fonts/HTML-CSS/"**/MathJax_Win*
-
-                # Also remove the SVG output option. Such option consumes a
-                # considerable amount of space, while contributing comparatively
-                # little: the HTML-CSS output option should suffice for EPUB3-
-                # and hence MathJax-capable ebook readers. Note this requires
-                # MathJax to be configured to use only the HTML-CSS output
-                # option, below.
-                rm -rfv "${dirname_trg}/jax/output/SVG"
+            # ...and its removal is requested, do so safely.
+            if (( ${+elicker_options[--force]} )) {
+                remove_dir "${dirname_trg_mathjax}"
+            # Else, preserve such directory and warn the user.
+            } else {
+                print_warning\
+                    "Preserving target MathJax directory \"${dirname_trg_mathjax}\" without modification. (Consider passing \"--force\" to override this.)"
             }
+        }
+
+        # If such target directory no longer exists, recursively copy to such
+        # directory. For efficiency, do so in a backgrounded subshell.
+        if [[ ! -d "${dirname_trg_mathjax}" ]] {
+            ( install_mathjax ) &
         }
     }
 }
 
+# ....................{ ELYXER ~ run                       }....................
 # Run eLyXer, converting such source to target file.
 print_message "Running eLyXer as:
     elyxer ${*} \"${filename_src_lyx}\" \"${filename_trg_html_old}\""
@@ -532,10 +647,10 @@ command elyxer "${@}"\
     "${filename_trg_html_old}"
 
 # ....................{ POST-PROCESS                       }....................
-print_message "Post-processing \"${filename_trg_html}\"."
+print_message "Post-processing \"${dirname_trg}\"."
 
 # Copy such temporary target file to the target file LyX expects.
-cp -v "${filename_trg_html_old}" "${filename_trg_html}"
+cp -v -- "${filename_trg_html_old}" "${filename_trg_html}"
 
 # Load zsh module "zsh/mapfile", providing both read and write access to text
 # file contents by map global ${mapfile}, only for the exact duration of such
@@ -553,7 +668,7 @@ zmodload zsh/mapfile
     # distate for additional dependencies, however, we take the hard way.
     if (( mathjax_index <= ${#} )) {
         local mathjax_preamble mathjax_config mathjax_style
-        print_message 'Configuring sane MathJax defaults.'
+        print_message 'Reconfiguring MathJax.'
 
         # Inline MathJax startup hooks to be inserted into the output HTML file
         # immediately prior to loading MathJax.
@@ -739,10 +854,94 @@ zmodload zsh/mapfile
     zmodload -ui zsh/mapfile
 }
 
+# ....................{ POST-PROCESS ~ clean               }....................
+# If requested, remove all temporary in such target directory.
+if (( ${+elicker_options[--clean]} )) {
+    print_message "Cleaning temporary paths."
+
+    # Remove the elicker-specific temporary preprocessed HTML file.
+    rm -f -- "${filename_trg_html_old}"
+
+    # Remove all LyX-specific temporary files. Dismantled, this is:
+    #
+    # * "<->", matching one or more integers.
+    # * "(.)", matching only regular files.
+    rm -f -- "${dirname_trg}/"<->lyxpreview*(.)
+}
+
 # ....................{ END                                }....................
-print_message 'Finished.'
+print_message "Post-processed \"${dirname_trg}\"."
 
 # --------------------( WASTELANDS                         )--------------------
+#FUXME: This must be generalized as below. If the user passed "--css", then such
+#file must also be manually copied over as below. Don't bother with
+#backgrounding such operations to a subshell. (This should be quite fast.)
+
+        # If such target directory already exists, use such directory as is without
+        # recopying for efficiency and inform the caller.
+        # if [[ -d "${dirname_trg_mathjax}" ]] {
+        #     print_warning\
+        #         "Preserving target MathJax directory \"${dirname_trg_mathjax}\" without modification."
+        # # Else, recursively copy the source MathJax subdirectory to the
+        # # target directory and remove all nonessential files and subdirectories
+        # # from such copy. For efficiency, perform such operations in a
+        # # backgrounded subshell.
+        # } else {
+
+    # For efficiency, perform such removal in a backgrounded subshell.
+    #FUXME: Arguably, other expensive file operations should *ALSO* be
+    #backgrounded.
+
+#FUXME: Add support for option "--clean". For efficiency, perform such cleaning
+#in a backgrounded subshell. (Arguably, other expensive file operations should
+#*ALSO* be backgrounded.)
+#FUXME: Actually, a better solution would be to provide a new pair of options
+#"--archive" and "--no-archive" (defaulting to "--archive") producing a
+#compressed archive in the target directory containing all relevant files for
+#production. Use a safe blacklist-oriented approach as follows:
+#
+#* Recursively copy all files and subdirectories in "${dirname_trg}" to a
+#  temporary subdirectory of "${dirname_trg}", to guarantee writability -- say,
+#  "${dirname_trg}/archive".
+#* Remove all LyX-specific files from "${dirname_trg}/archive". Happily, these
+#  are easily identifiable as all *FILES* (not directories) matching glob
+#  <->lyxpreview*(.).
+#
+#For efficiency, perform such operations in a backgrounded subshell.
+#
+#If "${dirname_trg}/archive" already exists, simply print a nonfatal warning and
+#do nothing. (Too dangerous, otherwise.)
+#FUXME: Actually, a more useful option would probably be "--bundle-dir" (or some
+#such) accepting a dirname defaulting to "${dirname_trg}/bundle". No need for
+#compression and/or archival; creating a directory should suffice.
+#FUXME: In keeping with eLyXer option nomenclature, how about
+#"--destdirectoryslim"? *shrug* Bah! That's terrible. How about
+#"--production-dir"? That's fairly explicit, yes?
+#FUXME: Naturally, inform the user of such directory after completion.
+
+            # Pass the basename of such directory to eLyXer, permitting the
+            # output HTML file and such directory to be subsequently moved on
+            # the filesystem without breaking such HTML.
+        # Pass the basename of such file to eLyXer, instructing eLyXer to always
+        # find such file in the same directory as the output HTML file.
+        #FUXME: Not quite. Extend this as above; if "MathJax/" is not found,
+        #fallback to finding the first subdirectory containing "MathJax.js".
+#FUXME: Inform the user after completion of all target files and directories the
+#user will need to save to retain a complete, working HTML document. This should
+#include images as well as CSS and Javascript.
+
+            # If such a file exists, prefer the directory containing the first
+            # such file.
+        # If such a file exists, prefer the first such file.
+        # If a source MathJax subdirectory exists, enable local MathJax usage.
+        # if [[ -d "${dirname_src}/MathJax" ]] {
+
+      # --production-dir DIR    copy all output content to directory DIR
+      #                        [consider specifying this option when running
+      #                         elicker with LyX''s "View (Other Formats)->HTML"
+      #                         menu item, to make production-quality directories
+      #                         unpolluted by temporary LyX and LaTeX files]
+
 #FUXME: MathJax 2.3 is *INSANELY* huge, and it's only going to get larger. We
 #desparately need to shrink this even further. Examining "du MathJax", it's
 #clear that SVG output and non-TeX fonts (i.e., so-called web fonts) are yet
