@@ -42,66 +42,16 @@
 #FIXME: Before implementing option "--fork", research how to safely recursively
 #remove directories in non-interactive shell scripts.
 #FIXME: Minify locally copied CSS files. (Not required for MathJax, of course.)
-#FIXME: To improve output readability, colorize output.
 #FIXME: Excise everything in the "WASTELANDS" prior to the first release. "Aww,
 #shucks."
 
 #FIXME: The "README.md" should explicitly document all of the nifty things we do
 #here. Too many to exhaustively list here, so grep below!
 
-# ....................{ GLOBALS                            }....................
-# Current elicker version.
-typeset -g ELICKER_VERSION='0.0.1'
-
+# ....................{ ZSH                                }....................
 # Minimum zsh version required by elicker.
 typeset -g ELICKER_ZSH_VERSION_REQUIRED='4.3.0'
 
-# Minimum eLyXer version recommended by elicker.
-typeset -g ELICKER_ELYXER_VERSION_RECOMMENDED='1.2.5'
-
-# elicker help printed when the caller passes option "--help".
-typeset -g ELICKER_HELP='Usage: elicker [OPTIONS]... SOURCE_DIRECTORY SOURCE_LYX_FILE TARGET_HTML_FILE
-
-A sanitary wrapper for eLyXer optimizing output content for real-world end use
-(e.g., EPUB2 ebook readers), intended to be run from within LyX by changing the
-"Tools->Preferences->File Handling->Converters" dialog field "Converter:" to:
-
-    elicker --title "My Book Title" $$r $$i $$o
-
-Since neither elicker or eLyXer are capable of automatically copying the title
-from input LyX documents to output XHTML files, specify such title as above.
-
-elicker supports all options and arguments supported by eLyXer, as well as
-the following elicker-specific options:
-
-      --clean                 remove temporary paths from the target directory
-                             [by default, elicker preserves such paths without
-                              modification]
-
-      --force                 always overwrite target paths that already exist
-                             [by default, elicker preserves such paths without
-                              modification]
-
-      --platform PLATFORM     output content intended for the specified type of
-                              publication PLATFORM, either "ebook" (the default)
-                              or "website": e.g.,
-         --platform ebook     output content intended for publication as
-                              offline ebooks of any format
-         --platform website   output content intended for publication directly
-                              onto websites
-
-      --quality QUALITY       output content of the specified QUALITY, either
-                              "high" (the default) or "low": e.g.,
-         --quality high       output high-quality content, intended for
-                              publication either directly onto websites or as
-                              EPUB3-conformant ebooks (e.g., KF8)
-         --quality low        output low-quality content, intended for
-                              publication as EPUB2- or MOBI-conformant ebooks
-
-eLyXer options and arguments are as follows:
-'
-
-# ....................{ ZSH                                }....................
 # If the current zsh version is less than such version, terminate with failure.
 autoload -U is-at-least
 is-at-least "${ELICKER_ZSH_VERSION_REQUIRED}" || {
@@ -109,42 +59,96 @@ is-at-least "${ELICKER_ZSH_VERSION_REQUIRED}" || {
     exit 1
 }
 
-# Enforce strictness.
-set -e
+# Enable strictness, implicitly reporting failure (i.e., nonzero exit status)
+# from the current context (e.g., function, script) on any command in such
+# context reporting failure.
+setopt err_return
 
 # Enable sane shell defaults.
 setopt extended_glob no_unset null_glob rc_quotes rematch_pcre
 
-# Enable exception handling.
-autoload throw catch
+# Enable exception handling. For safety, suppress alias expansion while defining
+# such functions with option "-U".
+autoload -U throw catch
+
+# Enable terminal color.
+autoload -U colors
+colors
 
 # Load core zsh modules.
 zmodload zsh/pcre zsh/parameter
 
+# ....................{ GLOBALS                            }....................
+# Current elicker version.
+typeset -g ELICKER_VERSION='0.1.1'
+
+# Minimum eLyXer version recommended by elicker.
+typeset -g ELICKER_ELYXER_VERSION_RECOMMENDED='1.2.5'
+
+# elicker help printed when the caller passes option "--help".
+typeset -g ELICKER_HELP=${fg_no_bold[blue]}'Usage'${bold_color}': '${fg_bold[cyan]}'elicker '${fg_bold[black]}'['${fg_no_bold[cyan]}'OPTIONS'${fg_bold[black]}']'${fg_no_bold[white]}'... '${fg_no_bold[cyan]}'SOURCE_DIRECTORY SOURCE_LYX_FILE TARGET_HTML_FILE
+
+'${fg_no_bold[white]}'A sanitary wrapper for eLyXer optimizing output content for real-world end use
+(e.g., EPUB2 ebook readers), intended to be run from within LyX by changing the
+"Tools->Preferences->File Handling->Converters" dialog field "Converter:" to:
+
+    '${fg_bold[white]}'elicker --title "My Book Title" $$r $$i $$o
+
+'${fg_no_bold[white]}'Since neither elicker or eLyXer are capable of automatically copying the title
+from input LyX documents to output XHTML files, specify such title as above.
+
+elicker supports all options and arguments supported by eLyXer, as well as
+the following elicker-specific options:
+
+      '${fg_bold[green]}'--clean                 '${fg_bold[white]}'remove temporary paths from the target directory
+                             '${fg_bold[black]}'['${fg_no_bold[white]}'by default, elicker preserves such paths without
+                              modification'${fg_bold[black]}']
+
+      '${fg_bold[green]}'--force                 '${fg_bold[white]}'always overwrite target paths that already exist
+                             '${fg_bold[black]}'['${fg_no_bold[white]}'by default, elicker preserves such paths without
+                              modification'${fg_bold[black]}']
+
+      '${fg_bold[green]}'--platform '${fg_no_bold[green]}'PLATFORM     '${fg_bold[white]}'output content intended for the specified type of
+                              '${fg_bold[white]}'publication '${fg_no_bold[green]}'PLATFORM'${fg_no_bold[white]}', either '${fg_no_bold[magenta]}'"ebook" '${fg_bold[black]}'('${fg_no_bold[white]}'the default'${fg_bold[black]}')
+                              or '${fg_no_bold[magenta]}'"website"'${fg_no_bold[white]}': e.g.,
+         '${fg_bold[magenta]}'--platform '${fg_no_bold[magenta]}'ebook     '${fg_no_bold[white]}'output content intended for publication as
+                              offline ebooks of any format
+         '${fg_bold[magenta]}'--platform '${fg_no_bold[magenta]}'website   '${fg_no_bold[white]}'output content intended for publication directly
+                              onto websites
+
+      '${fg_bold[green]}'--quality '${fg_no_bold[green]}'QUALITY       '${fg_bold[white]}'output content of the specified '${fg_no_bold[green]}'QUALITY'${fg_no_bold[white]}', either
+                              '${fg_no_bold[magenta]}'"high" '${fg_bold[black]}'('${fg_no_bold[white]}'the default'${fg_bold[black]}') '${fg_no_bold[white]}'or '${fg_no_bold[magenta]}'"low"'${fg_no_bold[white]}': e.g.,
+         '${fg_bold[magenta]}'--quality '${fg_no_bold[magenta]}'high       '${fg_no_bold[white]}'output high-quality content, intended for
+                              publication either directly onto websites or as
+                              EPUB3-conformant ebooks (e.g., KF8)
+         '${fg_bold[magenta]}'--quality '${fg_no_bold[magenta]}'low        '${fg_no_bold[white]}'output low-quality content, intended for
+                              publication as EPUB2- or MOBI-conformant ebooks
+
+eLyXer options and arguments are as follows:
+'
+
 # ....................{ HELPERS ~ output                   }....................
 # Print the passed message to standard output.
 function print_message() {
-    print "elicker: ${*}"
+    print ${fg_no_bold[blue]}'elicker'${bold_color}': '${fg_bold[white]}"${*}"
 }
 
 # Print the passed message to standard error.
 function print_warning() {
-    print "elicker: ${*}" 1>&2
+    print ${fg_no_bold[blue]}'elicker'${bold_color}': '${fg_bold[yellow]}"${*}" 1>&2
 }
 
 # Print the passed message to standard error and throw a fatal exception
 # terminating the current script.
 function die() {
-    print_warning "${*}"
+    print ${fg_no_bold[blue]}'elicker'${bold_color}': '${fg_bold[red]}"${*}" 1>&2
     throw elicker_exception
 }
 
 # Print the passed message preceded by elyxer help to standard error and throw a
 # fatal exception terminating the current script.
 function die_with_help() {
-    print_warning "${*}"$'\n\n'"${ELICKER_HELP}"
-    command elyxer --help 1>&2
-    throw elicker_exception
+    die "${*}"$'\n\n'"${ELICKER_HELP}"$'\n'"$(command elyxer --help 2>&1)"
 }
 
 # ....................{ HELPERS ~ paths                    }....................
@@ -497,7 +501,7 @@ function install_mathjax() {
     # Such removals explicitly state the paths to be removed and hence are
     # fundamentally safe -- or, at least safer than removals expanding only
     # variables (e.g., 'rm -rf -- "${dirname_trg_mathjax}"').
-    print_message "Trimming target MathJax."
+    print_message "Minifying target MathJax."
     rm -rf -- "${dirname_trg_mathjax}"/{docs,test,unpacked}
     rm -f  -- "${dirname_trg_mathjax}"/{LICENSE,README*,.gitignore,bower.json}
 
@@ -873,6 +877,16 @@ if (( ${+elicker_options[--clean]} )) {
 print_message "Post-processed \"${dirname_trg}\"."
 
 # --------------------( WASTELANDS                         )--------------------
+#FUXME: To improve output readability, colorize output.
+
+#   print_warning "${*}"$'\n\n'"${ELICKER_HELP}"
+#   command elyxer --help 1>&2
+#   throw elicker_exception
+
+    # print ${fg_no_bold[blue]}'elicker'${bold_color}': '${fg_bold[white]}"${*}"
+#FUXME: Silly and possibly unproductive. Just set the corresponding zsh-specific
+#shell option below.
+
 #FUXME: This must be generalized as below. If the user passed "--css", then such
 #file must also be manually copied over as below. Don't bother with
 #backgrounding such operations to a subshell. (This should be quite fast.)
