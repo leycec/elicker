@@ -39,11 +39,13 @@
 #   of both EPUB2 and EPUB3 ebooks (as well generating proper ebook manifests):
 #   https://github.com/IDPF/epubcheck
 
-#FIXME: Before implementing option "--fork", research how to safely recursively
-#remove directories in non-interactive shell scripts.
 #FIXME: Minify locally copied CSS files. (Not required for MathJax, of course.)
 #FIXME: Excise everything in the "WASTELANDS" prior to the first release. "Aww,
 #shucks."
+#FIXME: eLyXer appears to suffer a bug: figures with "%20" in filenames are
+#silently broken. While we never noticed this before, it's certainly apparent
+#now! We attempted disabling various possibly related elicker functionality, to
+#no avail. I'm afraid while we'll simply have to rectify this in Ally's copy.
 
 #FIXME: The "README.md" should explicitly document all of the nifty things we do
 #here. Too many to exhaustively list here, so grep below!
@@ -78,6 +80,10 @@ colors
 # Load core zsh modules.
 zmodload zsh/pcre zsh/parameter
 
+# Load core zsh module "zstat", wrapping system call stat() with zsh function
+# zstat() (rather than stat()).
+zmodload -F zsh/stat b:zstat
+
 # ....................{ GLOBALS                            }....................
 # Current elicker version.
 typeset -g ELICKER_VERSION='0.1.1'
@@ -88,17 +94,21 @@ typeset -g ELICKER_ELYXER_VERSION_RECOMMENDED='1.2.5'
 # elicker help printed when the caller passes option "--help".
 typeset -g ELICKER_HELP=${fg_no_bold[blue]}'Usage'${bold_color}': '${fg_bold[cyan]}'elicker '${fg_bold[black]}'['${fg_no_bold[cyan]}'OPTIONS'${fg_bold[black]}']'${fg_no_bold[white]}'... '${fg_no_bold[cyan]}'SOURCE_DIRECTORY SOURCE_LYX_FILE TARGET_HTML_FILE
 
-'${fg_no_bold[white]}'A sanitary wrapper for eLyXer optimizing output content for real-world end use
-(e.g., EPUB2 ebook readers), intended to be run from within LyX by changing the
-"Tools->Preferences->File Handling->Converters" dialog field "Converter:" to:
+'${fg_no_bold[white]}'An eLyXer wrapper improving output for real-world use (e.g., EPUB2 ebooks).
+
+'${fg_bold[black]}'['${fg_bold[cyan]}'USAGE'${fg_bold[black]}']
+
+'${fg_no_bold[white]}'elicker is intended to be run by LyX itself. Edit the '${fg_bold[magenta]}'"'${fg_no_bold[magenta]}'Converter:'${fg_bold[magenta]}'" '${fg_no_bold[white]}'field of the
+'${fg_bold[magenta]}'"'${fg_no_bold[magenta]}'Tools / Preferences / File Handling / Converters / LyX -> HTML'${fg_bold[magenta]}'"'${fg_no_bold[white]}' dialog to:
 
     '${fg_bold[white]}'elicker --title "My Book Title" $$r $$i $$o
 
-'${fg_no_bold[white]}'Since neither elicker or eLyXer are capable of automatically copying the title
-from input LyX documents to output XHTML files, specify such title as above.
+'${fg_no_bold[white]}'Press '${fg_bold[magenta]}'"'${fg_no_bold[magenta]}'Modify'${fg_bold[magenta]}'"'${fg_no_bold[white]}' after editing such field. Due to inadequacies in eLyXer, the
+output title must be changed on a per-document basis.
 
-elicker supports all options and arguments supported by eLyXer, as well as
-the following elicker-specific options:
+'${fg_bold[black]}'['${fg_bold[cyan]}'OPTIONS'${fg_bold[black]}']
+
+'${fg_no_bold[white]}'elicker explicitly supports the following options:
 
       '${fg_bold[green]}'--clean                 '${fg_bold[white]}'remove temporary paths from the target directory
                              '${fg_bold[black]}'['${fg_no_bold[white]}'by default, elicker preserves such paths without
@@ -108,40 +118,37 @@ the following elicker-specific options:
                              '${fg_bold[black]}'['${fg_no_bold[white]}'by default, elicker preserves such paths without
                               modification'${fg_bold[black]}']
 
-      '${fg_bold[green]}'--platform '${fg_no_bold[green]}'PLATFORM     '${fg_bold[white]}'output content intended for the specified type of
-                              '${fg_bold[white]}'publication '${fg_no_bold[green]}'PLATFORM'${fg_no_bold[white]}', either '${fg_no_bold[magenta]}'"ebook" '${fg_bold[black]}'('${fg_no_bold[white]}'the default'${fg_bold[black]}')
-                              or '${fg_no_bold[magenta]}'"website"'${fg_no_bold[white]}': e.g.,
-         '${fg_bold[magenta]}'--platform '${fg_no_bold[magenta]}'ebook     '${fg_no_bold[white]}'output content intended for publication as
-                              offline ebooks of any format
-         '${fg_bold[magenta]}'--platform '${fg_no_bold[magenta]}'website   '${fg_no_bold[white]}'output content intended for publication directly
-                              onto websites
+      '${fg_bold[green]}'--platform '${fg_no_bold[green]}'PLATFORM     '${fg_bold[white]}'target the specified publication '${fg_no_bold[green]}'PLATFORM'${fg_no_bold[white]}', either 
+                              '${fg_no_bold[magenta]}'"ebook" '${fg_bold[black]}'('${fg_no_bold[white]}'the default'${fg_bold[black]}')'${fg_no_bold[white]}' or '${fg_no_bold[magenta]}'"website"'${fg_no_bold[white]}': e.g.,
+         '${fg_bold[magenta]}'--platform '${fg_no_bold[magenta]}'ebook     '${fg_no_bold[white]}'for use in offline ebooks of any type
+         '${fg_bold[magenta]}'--platform '${fg_no_bold[magenta]}'website   '${fg_no_bold[white]}'for use on online websites of any type
 
-      '${fg_bold[green]}'--quality '${fg_no_bold[green]}'QUALITY       '${fg_bold[white]}'output content of the specified '${fg_no_bold[green]}'QUALITY'${fg_no_bold[white]}', either
+      '${fg_bold[green]}'--quality '${fg_no_bold[green]}'QUALITY       '${fg_bold[white]}'target the specified publication '${fg_no_bold[green]}'QUALITY'${fg_no_bold[white]}', either
                               '${fg_no_bold[magenta]}'"high" '${fg_bold[black]}'('${fg_no_bold[white]}'the default'${fg_bold[black]}') '${fg_no_bold[white]}'or '${fg_no_bold[magenta]}'"low"'${fg_no_bold[white]}': e.g.,
-         '${fg_bold[magenta]}'--quality '${fg_no_bold[magenta]}'high       '${fg_no_bold[white]}'output high-quality content, intended for
-                              publication either directly onto websites or as
-                              EPUB3-conformant ebooks (e.g., KF8)
-         '${fg_bold[magenta]}'--quality '${fg_no_bold[magenta]}'low        '${fg_no_bold[white]}'output low-quality content, intended for
-                              publication as EPUB2- or MOBI-conformant ebooks
+         '${fg_bold[magenta]}'--quality '${fg_no_bold[magenta]}'high       '${fg_no_bold[white]}'for use in high-quality websites or EPUB3 ebooks
+         '${fg_bold[magenta]}'--quality '${fg_no_bold[magenta]}'low        '${fg_no_bold[white]}'for use in low-quality EPUB2 or MOBI ebooks
 
-eLyXer options and arguments are as follows:
+'${fg_bold[black]}'['${fg_bold[cyan]}'ELYXER'${fg_bold[black]}']
+
+'${fg_no_bold[white]}'elicker passes all other options directly to eLyXer and hence also supports all
+options supported by eLyXer:
 '
 
 # ....................{ HELPERS ~ output                   }....................
 # Print the passed message to standard output.
 function print_message() {
-    print ${fg_no_bold[blue]}'elicker'${bold_color}': '${fg_bold[white]}"${*}"
+    print "${fg_no_bold[blue]}elicker${bold_color}: ${fg_bold[white]}${*}${reset_color}"
 }
 
 # Print the passed message to standard error.
 function print_warning() {
-    print ${fg_no_bold[blue]}'elicker'${bold_color}': '${fg_bold[yellow]}"${*}" 1>&2
+    print "${fg_no_bold[blue]}elicker${bold_color}: ${fg_bold[yellow]}${*}${reset_color}" 1>&2
 }
 
 # Print the passed message to standard error and throw a fatal exception
 # terminating the current script.
 function die() {
-    print ${fg_no_bold[blue]}'elicker'${bold_color}': '${fg_bold[red]}"${*}" 1>&2
+    print "${fg_no_bold[blue]}elicker${bold_color}: ${fg_bold[red]}${*}${reset_color}" 1>&2
     throw elicker_exception
 }
 
@@ -150,6 +157,32 @@ function die() {
 function die_with_help() {
     die "${*}"$'\n\n'"${ELICKER_HELP}"$'\n'"$(command elyxer --help 2>&1)"
 }
+
+# ....................{ SAFETY                             }....................
+# If the current caller is effectively the superuser, terminate this script.
+# We should *NEVER* be run as root or anyone resembling root.
+(( EUID != 0 )) || die\
+    'Expected non-root user. (Please: do not run elicker as root.)'
+
+# ....................{ SAFETY ~ elyxer                    }....................
+local elyxer_version
+
+# If eLyXer is *NOT* in the current ${PATH}, fail.
+(( ${+commands[elyxer]} )) || die\
+    '"elyxer" not installed or not in the current ${PATH}.'
+
+# Parse the current eLyXer version from eLyXer standard error (!).
+elyxer_version="$(elyxer --version 2>&1)"
+if [[ "${elyxer_version}" == *(#b)(<->.<->.<->)* ]] {
+    elyxer_version="${match[1]}"
+} else {
+    die "eLyXer version output \"${elyxer_version}\" contains no parseable version.
+Consider installing at least eLyXer ${ELICKER_ELYXER_VERSION_RECOMMENDED}."
+}
+
+# If the current eLyXer version is less than recommended, print a warning.
+is-at-least "${ELICKER_ELYXER_VERSION_RECOMMENDED}" "${elyxer_version}" ||
+    print_warning "eLyXer version ${elyxer_version} less than recommended ${ELICKER_ELYXER_VERSION_RECOMMENDED}."
 
 # ....................{ HELPERS ~ paths                    }....................
 # Safely recursively remove the passed directory. If such directory fails any of
@@ -175,42 +208,17 @@ function remove_dir() {
     dirname="$(print -r -- "${dirname}"(:A))"
 
     # Validation continues.
-    [[ "${dirname}" != '/'('bin'|'boot'|'dev'|'etc'|'opt'|'proc'|'root'|'sbin'|'sys'|'usr'|'lib'[^/]#)('/'*|) ]] || die\
-        '"'${dirname}'" resides in a system directory (e.g., "/etc", "/usr").'
+    [[ "${dirname}" != '/'(|'bin'|'boot'|'dev'|'etc'|'opt'|'proc'|'root'|'sbin'|'sys'|'usr'|'lib'[^/]#)('/'*|) ]] || die\
+        '"'${dirname}'" resides in or is a system directory (e.g., "/etc", "/usr").'
     [[ "${dirname}" != '/home'('/'[^/]##|)('/'|) ]] || die\
         '"'${dirname}'" is a user''s home directory.'
 #   's:^((\.?\*+/+)+.*|(/+\.?\*+)+.*|[\.\*/]+|.*/\.\*+)$::g')'
 
     # Recursively remove such directory. To prevent glob-reserved characters in
     # such path from being interpreted as a glob, double-quote such path.
-    print_warning 'Removing directory \"${dirname}\".'
-    #rm -rf -- "${dirname}"
+    print_message "Removing directory \"${dirname}\"."
+    rm -rf -- "${dirname}"
 }
-
-# ....................{ ELYXER                             }....................
-local elyxer_version
-
-# If eLyXer is *NOT* in the current ${PATH}, fail.
-(( ${+commands[elyxer]} )) || die\
-    '"elyxer" not installed or not in the current ${PATH}.'
-
-# Parse the current eLyXer version from eLyXer standard error (!).
-elyxer_version="$(elyxer --version 2>&1)"
-if [[ "${elyxer_version}" == *(#b)(<->.<->.<->)* ]] {
-    elyxer_version="${match[1]}"
-} else {
-    die "eLyXer version output \"${elyxer_version}\" contains no parseable version.
-Consider installing at least eLyXer ${ELICKER_ELYXER_VERSION_RECOMMENDED}."
-}
-
-# If the current eLyXer version is less than recommended, print a warning.
-is-at-least "${ELICKER_ELYXER_VERSION_RECOMMENDED}" "${elyxer_version}" ||
-    print_warning "eLyXer version ${elyxer_version} less than recommended ${ELICKER_ELYXER_VERSION_RECOMMENDED}."
-
-# If the current caller is effectively the superuser, terminate this script.
-# We should *NEVER* be run as root or anyone resembling root.
-(( EUID != 0 )) || die\
-    'Expected non-root user. (Please: do not run elicker as root.)'
 
 # ....................{ HELP                               }....................
 # Validate sanity.
@@ -246,6 +254,9 @@ if (( ${@[(i)--(help|lyxformat|version)]} <= ${#} )) {
 (( # >= 3 )) || die_with_help\
     'Expected optional elicker and/or eLyXer options, one absolute base dirname, one absolute or relative source LyX filename, and one absolute or relative target HTML filename.'
 
+# Else, inform the user of elicker starting up.
+print_message 'Starting.'
+
 local\
     dirname_src="${@[-3]}"\
     filename_src_lyx="${@[-2]}"\
@@ -272,9 +283,26 @@ if [[ "${filename_trg_html}" == '/'* ]] {
     filename_trg_html="${dirname_trg}/${filename_trg_html}"
 }
 
+# If such source directory does not exist, terminate this script.
+[[ -d "${dirname_src}" ]] || die\
+    "Source directory \"${dirname_src}/\" not found or not a directory."
+
+# If such target directory does not exist, silently attempt to create such
+# directory and all parents of such directory.
+[[ -d "${dirname_trg}" ]] || command mkdir -pv -- "${dirname_trg}"
+
 # If such target directory is *NOT* writable, fail.
 [[ -w "${dirname_trg}" ]] || die\
-    '"'${dirname_trg}'/" unwritable by current user '${USER}'.'
+    "Target directory \"${dirname_trg}/\" unwritable by current user ${USER}."
+
+# If such target directory literally contains zero files (not even the canonical
+# hard links "." or ".."), this script and hence LyX was probably run from a
+# directory that no longer exists. In such case, terminate this script.
+#
+# Note that in such case, prior conditions testing the existence and writability
+# of such directory succeed and hence are insufficient to avoid this edge case.
+(( $(zstat +nlink -- "${dirname_trg}") )) || die\
+    "Target directory \"${dirname_trg}/\" no longer exists."
 
 # If such source file is *NOT* an absolute path, prefix such path by such target
 # directory. Since the original source file may have been altered by a prior
@@ -289,6 +317,7 @@ if [[ "${filename_src_lyx}" != '/'* ]] {
 # to the latter, preserving eLyXer's preprocessed output can be helpful for
 # archival and debugging purposes.
 filename_trg_html_old="${filename_trg_html%.html}_old.html"
+# print "PWD: ${PWD}\ndirname_src: ${dirname_src}\ndirname_trg: ${dirname_trg}\nfilename_src_lyx: ${filename_src_lyx}\nfilename_trg_html: ${filename_trg_html}"
 
 # ....................{ OPTIONS                            }....................
 # Map of elicker-specific command-line options passed to this script. Each map
@@ -318,19 +347,6 @@ zparseopts -M -D -E -A elicker_options --\
     || die_with_help 'Invalid command-line argument(s).'
 #print_message "elicker_options: ${(kv@)elicker_options}"
 
-# ....................{ OPTIONS ~ force                     }....................
-# Enumeration identifying the intended platform of output content.
-local platform='ebook'
-
-# If the caller passed the "--platform" option, localize such option.
-if (( ${+elicker_options[--platform]} )) {
-    platform="${elicker_options[--platform]}"
-}
-
-# Validate such option.
-[[ "${platform}" == ('ebook'|'website') ]] || die\
-    "Platform \"${platform}\" unrecognized."
-
 # ....................{ OPTIONS ~ platform                  }....................
 # Enumeration identifying the intended platform of output content.
 local platform='ebook'
@@ -357,18 +373,23 @@ if (( ${+elicker_options[--quality]} )) {
 [[ "${quality}" == ('high'|'low') ]] || die\
     "Quality \"${quality}\" unrecognized."
 
-# ....................{ OPTIONS ~ production-dir           }....................
-# Ancillary target directory containing no temporary LyX or LateX files.
-local dirname_trg_production
-
-#FIXME: Implement me!
-#--production-dir
-
 # ....................{ OPTIONS ~ print                    }....................
-# Inform the user of all elicker-specific options.
-print_message "Parsed elicker options:
+# Human-readable synopsis of current elicker options, for debugging purposes.
+local elicker_options_output="Enabling elicker options:${fg_no_bold[white]}"
+if (( ${+elicker_options[--force]} )) {
+    elicker_options_output+='
+    --force'
+}
+if (( ${+elicker_options[--clean]} )) {
+    elicker_options_output+='
+    --clean'
+}
+elicker_options_output+="
     --platform ${platform}
     --quality ${quality}"
+
+# Print such options.
+print_message "${elicker_options_output}"
 
 # ....................{ ELYXER                             }....................
 # Set sane defaults for eLyXer options.
@@ -436,7 +457,7 @@ if ((   css_index <= ${#} )) {
         "\"${filename_src_css}/\" not found or not a file."
 
     # Target CSS file, guaranteed to be absolute.
-    local filename_trg_css="${filename_trg}/${filename_src_css:t}"
+    local filename_trg_css="${dirname_trg}/${filename_src_css:t}"
 
     # If such target file already exists...
     if [[ -f "${filename_trg_css}" ]] {
@@ -483,7 +504,7 @@ if ((   css_index <= ${#} )) {
 # For readability, aggregate all such MathJax path handling to this function.
 function install_mathjax() {
     # Validate sanity.
-    (( # == 0 )) || die "copy_and_trim_mathjax() expected no arguments."
+    (( # == 0 )) || die "install_mathjax() expected no arguments."
     (( ${+dirname_src_mathjax} + ${+dirname_trg_mathjax} == 2 )) || die\
         'Strings ${dirname_src_mathjax} and/or ${dirname_trg_mathjax} not set.'
 
@@ -550,7 +571,8 @@ function install_mathjax() {
     # * In subdirectories "woff", W3C-standardized web fonts
     #   explicitly supported by the EPUB3 standard.
     if [[ "${platform}" == 'ebook' ]] {
-        rm -rf -- "${dirname_trg_mathjax}/fonts/HTML-CSS/"*/~*/TeX
+        rm -rf -- "${dirname_trg_mathjax}/jax/output/HTML-CSS/fonts/"*~*/TeX
+        rm -rf -- "${dirname_trg_mathjax}/fonts/HTML-CSS/"*~*/TeX
         rm -rf -- "${dirname_trg_mathjax}/fonts/HTML-CSS/"**/{eot,svg}
         rm -f  -- "${dirname_trg_mathjax}/fonts/HTML-CSS/"**/MathJax_Win*
 
@@ -637,18 +659,17 @@ if ((   mathjax_index <= ${#} )) {
         # If such target directory no longer exists, recursively copy to such
         # directory. For efficiency, do so in a backgrounded subshell.
         if [[ ! -d "${dirname_trg_mathjax}" ]] {
-            ( install_mathjax ) &
+            install_mathjax
+            # ( install_mathjax ) &
         }
     }
 }
 
 # ....................{ ELYXER ~ run                       }....................
 # Run eLyXer, converting such source to target file.
-print_message "Running eLyXer as:
+print_message "Running eLyXer as:${fg_no_bold[white]}
     elyxer ${*} \"${filename_src_lyx}\" \"${filename_trg_html_old}\""
-command elyxer "${@}"\
-    "${filename_src_lyx}"\
-    "${filename_trg_html_old}"
+command elyxer "${@}" "${filename_src_lyx}" "${filename_trg_html_old}"
 
 # ....................{ POST-PROCESS                       }....................
 print_message "Post-processing \"${dirname_trg}\"."
@@ -877,6 +898,33 @@ if (( ${+elicker_options[--clean]} )) {
 print_message "Post-processed \"${dirname_trg}\"."
 
 # --------------------( WASTELANDS                         )--------------------
+# If the current directory is ".", this script and hence LyX was probably run
+# from a directory that no longer exists. If the case, terminate this script.
+# if [[ "${PWD}" == '.' && ! -w "${PWD}" ]] {
+#     die 'Current working directory no longer exists.'
+# }
+# [[ -w "${PWD}" ]] || print 'UGHUGH'
+
+#FUXME: Subtle issue: if ${PWD} == '.', then we're probably in a directory that
+#no longer exists. Check this and die if the case.
+
+#FUXME: Before implementing option "--fork", research how to safely recursively
+#remove directories in non-interactive shell scripts.
+# ....................{ OPTIONS ~ production-dir           }....................
+# Ancillary target directory containing no temporary LyX or LateX files.
+# local dirname_trg_production
+
+#FUXME: Implement me!
+#--production-dir
+
+# Neither elicker or eLyXer are capable of automatically setting the title
+# of output content.
+# from input LyX documents to output XHTML files, specify such title as above.
+
+# elicker also supports all options and arguments supported by eLyXer, as well as
+# the following elicker-specific options:
+# eLyXer options and arguments are as follows:
+
 #FUXME: To improve output readability, colorize output.
 
 #   print_warning "${*}"$'\n\n'"${ELICKER_HELP}"
