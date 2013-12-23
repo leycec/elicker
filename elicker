@@ -23,11 +23,16 @@
 #   document. Sadly, eLyXer defaults such title to "Converted document".
 #
 # --------------------( INSTALLATION                       )--------------------
-# elicker requires the following dependencies:
+# elicker requires the following mandatory dependencies:
 #
 # * LyX >= 2.0.0.
 # * eLyXer >= 1.2.5.
 # * zsh >= 5.0.0.
+#
+# elicker benefits from but does *NOT* require the following optional
+# dependencies:
+#
+# * YUI Compressor >= 2.4.8, for minifying (i.e., compressing) CSS files.
 #
 # --------------------( DESCRIPTION                        )--------------------
 # Convert the passed source LyX file in the passed directory into the passed
@@ -39,13 +44,8 @@
 #   of both EPUB2 and EPUB3 ebooks (as well generating proper ebook manifests):
 #   https://github.com/IDPF/epubcheck
 
-#FIXME: Minify locally copied CSS files. (Not required for MathJax, of course.)
 #FIXME: Excise everything in the "WASTELANDS" prior to the first release. "Aww,
 #shucks."
-#FIXME: eLyXer appears to suffer a bug: figures with "%20" in filenames are
-#silently broken. While we never noticed this before, it's certainly apparent
-#now! We attempted disabling various possibly related elicker functionality, to
-#no avail. I'm afraid while we'll simply have to rectify this in Ally's copy.
 
 #FIXME: The "README.md" should explicitly document all of the nifty things we do
 #here. Too many to exhaustively list here, so grep below!
@@ -463,19 +463,31 @@ if ((   css_index <= ${#} )) {
     if [[ -f "${filename_trg_css}" ]] {
         # ...and its removal is requested, do so safely.
         if (( ${+elicker_options[--force]} )) {
-            print_message "Removing target CSS."
+            print_message 'Removing target CSS.'
             rm -- "${filename_trg_css}"
         # Else, preserve such file and warn the user.
         } else {
             print_warning\
-                "Preserving target CSS file \"${filename_trg_css}\" without modification. (Consider passing \"--force\" to override this.)"
+                "Preserving target CSS file \"${filename_trg_css}\"
+without modification. (Pass \"--force\" to replace such file.)"
         }
     }
 
-    # If such target file no longer exists, copy to such file.
+    # If such target file no longer exists...
     if [[ ! -f "${filename_trg_css}" ]] {
-        print_message "Copying target CSS."
-        cp -v -- "${filename_src_css}" "${dirname_trg}"
+        # If YUI Compressor is installed, compress such (presumably
+        # uncompressed) source file to such target file.
+        if (( ${+commands[yuicompressor]} )) {
+            print_message 'Minifying target CSS (via "yuicompressor").'
+            command yuicompressor -v -o "${filename_trg_css}" -- "${filename_src_css}"
+        # Else, copy such source file to such target file unmodified and
+        # recommend YUI Compressor be installed.
+        } else {
+            print_message 'Copying target CSS.'
+            cp -v -- "${filename_src_css}" "${dirname_trg}"
+            print_warning 'Consider installing YUI Compressor. If installed, elicker automatically'
+'minifies (i.e., compresses) target CSS.'
+        }
     }
 }
 
@@ -652,16 +664,13 @@ if ((   mathjax_index <= ${#} )) {
             # Else, preserve such directory and warn the user.
             } else {
                 print_warning\
-                    "Preserving target MathJax directory \"${dirname_trg_mathjax}\" without modification. (Consider passing \"--force\" to override this.)"
+                    "Preserving target MathJax directory \"${dirname_trg_mathjax}\"
+without modification. (Pass \"--force\" to replace such file.)"
             }
         }
 
-        # If such target directory no longer exists, recursively copy to such
-        # directory. For efficiency, do so in a backgrounded subshell.
-        if [[ ! -d "${dirname_trg_mathjax}" ]] {
-            install_mathjax
-            # ( install_mathjax ) &
-        }
+        # If such target directory no longer exists, copy MathJax there.
+        [[ -d "${dirname_trg_mathjax}" ]] || install_mathjax
     }
 }
 
@@ -898,6 +907,14 @@ if (( ${+elicker_options[--clean]} )) {
 print_message "Post-processed \"${dirname_trg}\"."
 
 # --------------------( WASTELANDS                         )--------------------
+#FUXME: Minify locally copied CSS files. (Not required for MathJax, of course.)
+#FUXME: eLyXer appears to suffer a bug: figures with "%20" in filenames are
+#silently broken. While we never noticed this before, it's certainly apparent
+#now! We attempted disabling various possibly related elicker functionality, to
+#no avail. I'm afraid while we'll simply have to rectify this in Ally's copy.
+             # For efficiency, do so in a backgrounded subshell..
+            # ( install_mathjax ) &
+
 # If the current directory is ".", this script and hence LyX was probably run
 # from a directory that no longer exists. If the case, terminate this script.
 # if [[ "${PWD}" == '.' && ! -w "${PWD}" ]] {
