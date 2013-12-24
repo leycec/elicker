@@ -478,15 +478,15 @@ without modification. (Pass \"--force\" to replace such file.)"
         # If YUI Compressor is installed, compress such (presumably
         # uncompressed) source file to such target file.
         if (( ${+commands[yuicompressor]} )) {
-            print_message 'Minifying target CSS (via "yuicompressor").'
+            print_message 'Minifying target CSS with "yuicompressor".'
             command yuicompressor -v -o "${filename_trg_css}" -- "${filename_src_css}"
         # Else, copy such source file to such target file unmodified and
         # recommend YUI Compressor be installed.
         } else {
             print_message 'Copying target CSS.'
             cp -v -- "${filename_src_css}" "${dirname_trg}"
-            print_warning 'Consider installing YUI Compressor. If installed, elicker automatically'
-'minifies (i.e., compresses) target CSS.'
+            print_warning 'Consider installing YUI Compressor. If installed, elicker automatically
+minifies (i.e., compresses) target CSS.'
         }
     }
 }
@@ -540,16 +540,16 @@ function install_mathjax() {
 
     # Remove all stock MathJax configurations except "MMLorHTML.js",
     # explicitly referenced by eLyXer output. zsh to the rescue!
-    rm -rf -- "${dirname_trg_mathjax}"/config/*~*/MMLorHTML.js
+    rm -rf -- "${dirname_trg_mathjax}/config/"*~*/MMLorHTML.js
 
     # Remove all image fonts. This is safe *ONLY* under custom
     # MathJax configurations setting "imageFont: null". Fortunately,
     # eLyXer guarantees such setting when using MathJax locally --
     # which, of course, this conditional ensures we are.
-    rm -rf -- "${dirname_trg_mathjax}"/fonts/HTML-CSS/TeX/png
+    rm -rf -- "${dirname_trg_mathjax}/fonts/HTML-CSS/TeX/png"
 
     # Remove all non-TeX input options (e.g., MathML).
-    rm -rf -- "${dirname_trg_mathjax}"/jax/input~*/TeX
+    rm -rf -- "${dirname_trg_mathjax}/jax/input/"*~*/TeX
 
     # If tailoring output for ebooks, remove the following fonts
     # unlikely to ever be supported by ebook readers:
