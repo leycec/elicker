@@ -893,8 +893,11 @@ zmodload zsh/mapfile
 if (( ${+elicker_options[--clean]} )) {
     print_message "Cleaning temporary paths."
 
-    # Remove the elicker-specific temporary preprocessed HTML file.
+    # Remove the elicker-specific temporary HTML file.
     rm -f -- "${filename_trg_html_old}"
+
+    # Remove the eLyXer-specific temporary LyX file.
+    rm -f -- "${filename_trg_html/.html(#e)/.lyx}"
 
     # Remove all LyX-specific temporary files. Dismantled, this is:
     #
