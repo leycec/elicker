@@ -86,7 +86,7 @@ zmodload -F zsh/stat b:zstat
 
 # ....................{ GLOBALS                            }....................
 # Current elicker version.
-typeset -g ELICKER_VERSION='0.1.1'
+typeset -g ELICKER_VERSION='0.1.2'
 
 # Minimum eLyXer version recommended by elicker.
 typeset -g ELICKER_ELYXER_VERSION_RECOMMENDED='1.2.5'
@@ -94,17 +94,27 @@ typeset -g ELICKER_ELYXER_VERSION_RECOMMENDED='1.2.5'
 # elicker help printed when the caller passes option "--help".
 typeset -g ELICKER_HELP=${fg_no_bold[blue]}'Usage'${bold_color}': '${fg_bold[cyan]}'elicker '${fg_bold[black]}'['${fg_no_bold[cyan]}'OPTIONS'${fg_bold[black]}']'${fg_no_bold[white]}'... '${fg_no_bold[cyan]}'SOURCE_DIRECTORY SOURCE_LYX_FILE TARGET_HTML_FILE
 
-'${fg_no_bold[white]}'An eLyXer wrapper improving output for real-world use (e.g., EPUB2 ebooks).
+'${fg_no_bold[white]}'An eLyXer wrapper tailoring output for real-world use (e.g., EPUB2 ebooks).
 
-'${fg_bold[black]}'['${fg_bold[cyan]}'USAGE'${fg_bold[black]}']
+'${fg_bold[black]}'['${fg_bold[cyan]}'CONFIGURATION'${fg_bold[black]}']
 
-'${fg_no_bold[white]}'elicker is intended to be run by LyX itself. Edit the '${fg_bold[magenta]}'"'${fg_no_bold[magenta]}'Converter:'${fg_bold[magenta]}'" '${fg_no_bold[white]}'field of the
-'${fg_bold[magenta]}'"'${fg_no_bold[magenta]}'Tools / Preferences / File Handling / Converters / LyX -> HTML'${fg_bold[magenta]}'"'${fg_no_bold[white]}' dialog to:
+'${fg_bold[white]}'elicker'${fg_no_bold[white]}' is intended to be run from within LyX itself. Change the '${fg_bold[magenta]}'"'${fg_no_bold[magenta]}'Converter:'${fg_bold[magenta]}'"
+'${fg_no_bold[white]}'field of the '${fg_bold[magenta]}'"'${fg_no_bold[magenta]}'Tools / Preferences / File Handling / Converters / LyX -> HTML'${fg_bold[magenta]}'"'${fg_no_bold[white]}'
+dialog to the following line (changing '${fg_bold[green]}'"'${fg_no_bold[green]}'My Book Title'${fg_bold[green]}'"'${fg_no_bold[white]}' to the desired title):
 
     '${fg_bold[white]}'elicker --title "My Book Title" $$r $$i $$o
 
 '${fg_no_bold[white]}'Press '${fg_bold[magenta]}'"'${fg_no_bold[magenta]}'Modify'${fg_bold[magenta]}'"'${fg_no_bold[white]}' after editing such field. Due to inadequacies in eLyXer, the
 output title must be changed on a per-document basis.
+
+'${fg_bold[black]}'['${fg_bold[cyan]}'USAGE'${fg_bold[black]}']
+
+'${fg_no_bold[white]}'Run '${fg_bold[white]}'elicker'${fg_no_bold[white]}' from within LyX by selecting '${fg_bold[magenta]}'"'${fg_no_bold[magenta]}'View / View (Other Formats) / HTML'${fg_bold[magenta]}'"'${fg_no_bold[white]}'.
+
+If this successfully outputs a valid HTML file, consider re-editing the above
+field to include recommended options '${fg_bold[green]}'--clean'${fg_no_bold[white]}', '${fg_bold[green]}'--force'${fg_no_bold[white]}', and '${fg_bold[green]}'--splitpart '${fg_no_bold[green]}'1'${fg_no_bold[white]}': e.g.,
+
+    '${fg_bold[white]}'elicker --clean --force --splitpart 1 --title "The Watermelon Wave" $$r $$i $$o
 
 '${fg_bold[black]}'['${fg_bold[cyan]}'OPTIONS'${fg_bold[black]}']
 
@@ -225,16 +235,15 @@ function remove_dir() {
 (( # )) || die_with_help\
     'Expected at least one command-line option or argument.'
 
-# If the caller passed a help-related argument (e.g., "--help"), pass all such
-# arguments to "elyxer" as is without requiring the caller to have passed
-# filenames as well.
+# If a help-related option (e.g., "--help") was passed, pass all such options to
+# "elyxer" as is without requiring filenames to have been passed as well.
 if (( ${@[(i)--(help|lyxformat|version)]} <= ${#} )) {
-    # If the caller passed option "--version", also print an "elicker" version.
+    # If option "--version" was passed, also print an "elicker" version.
     if (( ${@[(ie)--version]} <= ${#} )) {
         print "* elicker version ${ELICKER_VERSION}"
     }
 
-    # If the caller passed option "--help", also print "elicker" help.
+    # If option "--help" was passed, also print "elicker" help.
     if (( ${@[(ie)--help]} <= ${#} )) {
         print "${ELICKER_HELP}"
     }
@@ -249,8 +258,8 @@ if (( ${@[(i)--(help|lyxformat|version)]} <= ${#} )) {
 }
 
 # ....................{ ARGUMENTS                          }....................
-# If the caller passed fewer than the required number of arguments, print the
-# elicker help to standard error and terminate with failure.
+# If fewer than the required number of arguments were passed, print the elicker
+# help to standard error and terminate with failure.
 (( # >= 3 )) || die_with_help\
     'Expected optional elicker and/or eLyXer options, one absolute base dirname, one absolute or relative source LyX filename, and one absolute or relative target HTML filename.'
 
@@ -260,10 +269,10 @@ print_message 'Starting.'
 local\
     dirname_src="${@[-3]}"\
     filename_src_lyx="${@[-2]}"\
-    filename_trg_html="${@[-1]}"\
-    filename_trg_html_old\
+    filename_trg_html_main="${@[-1]}"\
+    dirname_src_mathjax\
     dirname_trg
-#print 'pwd: '${PWD}'\n$$r: '${dirname_src}'\n$$i: '${filename_src_lyx}'\n$$o: '${filename_trg_html}
+#print 'pwd: '${PWD}'\n$$r: '${dirname_src}'\n$$i: '${filename_src_lyx}'\n$$o: '${filename_trg_html_main}
 #print "Current arguments: ${*}"
 
 # Pop such filenames from the argument list, leaving only eLyXer options.
@@ -274,13 +283,13 @@ dirname_src="${dirname_src%/}"
 
 # If such target file is an absolute path, set the target directory to the
 # directory containing such file.
-if [[ "${filename_trg_html}" == '/'* ]] {
-    dirname_trg="${filename_trg_html:h}"
+if [[ "${filename_trg_html_main}" == '/'* ]] {
+    dirname_trg="${filename_trg_html_main:h}"
 # Else, set the target directory to the current directory and prefix the target
 # file by such directory.
 } else {
     dirname_trg="${PWD}"
-    filename_trg_html="${dirname_trg}/${filename_trg_html}"
+    filename_trg_html_main="${dirname_trg}/${filename_trg_html_main}"
 }
 
 # If such source directory does not exist, terminate this script.
@@ -311,13 +320,7 @@ if [[ "${filename_trg_html}" == '/'* ]] {
 if [[ "${filename_src_lyx}" != '/'* ]] {
     filename_src_lyx="${dirname_trg}/${filename_src_lyx}"
 }
-
-# Insist eLyXer output to an intermediate target file rather than the passed
-# target file that LyX expects. While we could permit eLyXer to instead output
-# to the latter, preserving eLyXer's preprocessed output can be helpful for
-# archival and debugging purposes.
-filename_trg_html_old="${filename_trg_html%.html}_old.html"
-# print "PWD: ${PWD}\ndirname_src: ${dirname_src}\ndirname_trg: ${dirname_trg}\nfilename_src_lyx: ${filename_src_lyx}\nfilename_trg_html: ${filename_trg_html}"
+# print "PWD: ${PWD}\ndirname_src: ${dirname_src}\ndirname_trg: ${dirname_trg}\nfilename_src_lyx: ${filename_src_lyx}\nfilename_trg_html_main: ${filename_trg_html_main}"
 
 # ....................{ OPTIONS                            }....................
 # Map of elicker-specific command-line options passed to this script. Each map
@@ -351,7 +354,7 @@ zparseopts -M -D -E -A elicker_options --\
 # Enumeration identifying the intended platform of output content.
 local platform='ebook'
 
-# If the caller passed the "--platform" option, localize such option.
+# If option "--platform" was passed, localize such option.
 if (( ${+elicker_options[--platform]} )) {
     platform="${elicker_options[--platform]}"
 }
@@ -364,7 +367,7 @@ if (( ${+elicker_options[--platform]} )) {
 # Enumeration identifying the intended quality of output content.
 local quality='high'
 
-# If the caller passed the "--quality" option, localize such option.
+# If option "--quality" was passed, localize such option.
 if (( ${+elicker_options[--quality]} )) {
     quality="${elicker_options[--quality]}"
 }
@@ -402,20 +405,20 @@ argv+=(
     --nofooter
 )
 
-# If the caller passed no "--imageformat" option, coerce all non-JPEG bitmap
-# images to JPEG. This substantially reduces file size with little to no
-# discernable loss in visual quality. Due to hardware constraints under first-
-# generation ebook readers, such reductions typically improve the portability of
-# ebooks converted from such output. Likewise, due to bandwidth constraints
-# under typical website hosts, such reductions also reduce the overhead of
-# publishing books directly to websites.
+# If no "--imageformat" option was passed, coerce all non-JPEG bitmap images to
+# JPEG. This substantially reduces file size with little to no discernable loss
+# in visual quality. Due to hardware constraints under first- generation ebook
+# readers, such reductions typically improve the portability of ebooks converted
+# from such output. Likewise, due to bandwidth constraints under typical website
+# hosts, such reductions also reduce the overhead of publishing books directly
+# to websites.
 if (( ${@[(ie)--imageformat]} > ${#} )) {
     argv+=( --imageformat '.jpg' )
 }
 
 # ....................{ ELYXER ~ css                       }....................
-# If the caller passed no "--css" option, attempt to find a local CSS file for
-# use in the output HTML file.
+# If no "--css" option was passed, attempt to find a local CSS file for use in
+# the output HTML file.
 if (( ${@[(ie)--css]} > ${#} )) {
     # If the canonical CSS file for eLyXer does *NOT* exist in the source
     # directory but some CSS file does, arbitrarily prefer the first such file.
@@ -441,7 +444,7 @@ Consider renaming such file to \"lyx.css\" to avoid this warning in the future."
     }
 }
 
-# If option "--css" is enabled...
+# If option "--css" was passed...
 integer css_index="${@[(ie)--css]}"
 if ((   css_index <= ${#} )) {
     # Source CSS file, either relative or absolute.
@@ -492,6 +495,8 @@ minifies (i.e., compresses) target CSS.'
 }
 
 # ....................{ ELYXER ~ math                      }....................
+# void install_mathjax(void)
+#
 # Recursively copy the source MathJax subdirectory to the target directory and
 # remove all nonessential files and subdirectories from such copy. This is
 # crucial, as the uncompressed MathJax distribution rapidly approaches 100MB in
@@ -517,8 +522,7 @@ minifies (i.e., compresses) target CSS.'
 function install_mathjax() {
     # Validate sanity.
     (( # == 0 )) || die "install_mathjax() expected no arguments."
-    (( ${+dirname_src_mathjax} + ${+dirname_trg_mathjax} == 2 )) || die\
-        'Strings ${dirname_src_mathjax} and/or ${dirname_trg_mathjax} not set.'
+    (( ${+dirname_trg_mathjax} )) || die 'String ${dirname_trg_mathjax} unset.'
 
     # Copy MathJax.
     print_message "Copying target MathJax."
@@ -611,7 +615,7 @@ if (( ${@[(ie)--mathjax]} > ${#} &&\
         # source directory but some directory containing the canonical MathJax
         # file "MathJax.js" does, arbitrarily prefer the first such directory.
         # In such case, print a warning as the user may not be expecting this.
-        local dirname_src_mathjax="${dirname_src}/MathJax"
+        dirname_src_mathjax="${dirname_src}/MathJax"
         if [[ ! -d "${dirname_src_mathjax}" ]] {
             typeset -a filenames_src_mathjax
             filenames_src_mathjax=( "${dirname_src}/"*/MathJax.js )
@@ -640,7 +644,7 @@ Consider renaming such directory to \"MathJax\" to avoid this warning in the fut
 integer mathjax_index="${@[(ie)--mathjax]}"
 if ((   mathjax_index <= ${#} )) {
     # Source MathJax directory, either relative or absolute, or "remote".
-    local dirname_src_mathjax="${@[mathjax_index + 1]}"
+    dirname_src_mathjax="${@[mathjax_index + 1]}"
 
     # If such directory is local, customize local MathJax usage.
     if [[ "${dirname_src_mathjax}" != 'remote' ]] {
@@ -672,35 +676,38 @@ without modification. (Pass \"--force\" to replace such file.)"
         # If such target directory no longer exists, copy MathJax there.
         [[ -d "${dirname_trg_mathjax}" ]] || install_mathjax
     }
+# Else, undefine ${dirname_src_mathjax} to ensure fatal errors if such variable
+# is subsequently erroneously accessed when option "--mathjax" is *NOT* passed.
+# (This is purely for safety.)
+} else {
+    unset dirname_src_mathjax
 }
 
 # ....................{ ELYXER ~ run                       }....................
 # Run eLyXer, converting such source to target file.
 print_message "Running eLyXer as:${fg_no_bold[white]}
-    elyxer ${*} \"${filename_src_lyx}\" \"${filename_trg_html_old}\""
-command elyxer "${@}" "${filename_src_lyx}" "${filename_trg_html_old}"
+    elyxer ${*} \"${filename_src_lyx}\" \"${filename_trg_html_main}\""
+command elyxer "${@}" "${filename_src_lyx}" "${filename_trg_html_main}"
 
 # ....................{ POST-PROCESS                       }....................
-print_message "Post-processing \"${dirname_trg}\"."
+# void process_file_trg_html(string filename_trg_html)
+#
+# Post-process the passed output HTML file.
+function process_file_trg_html() {
+    # Validate sanity.
+    (( # == 1 )) || die "process_file_trg_html() expected one filename."
+    local filename_trg_html="${1}"
+    print_message 'Post-processing "'${filename_trg_html}'".'
 
-# Copy such temporary target file to the target file LyX expects.
-cp -v -- "${filename_trg_html_old}" "${filename_trg_html}"
-
-# Load zsh module "zsh/mapfile", providing both read and write access to text
-# file contents by map global ${mapfile}, only for the exact duration of such
-# access. Since unsetting map entries permanently, silently deletes the
-# corresponding files, such module is inherently unsafe and should only be
-# loaded as long as required.
-zmodload zsh/mapfile
-{
-    # If displaying math via MathJax, modify HTML output accordingly.
+    # If displaying math via MathJax, process such file accordingly.
+    #
     # For safety, performing such changes requires matching multiple lines.
     # While "awk" or "sed" could be employed to do so, both behave awkwardly
     # across multiple lines. Instead, leverage the the multiline-matching PCRE
     # facilities of zsh module "zsh/pcre" to do so. It should be noted that
     # XMLStarlet is a preferable means of modifying XML. Due to laziness and a
     # distate for additional dependencies, however, we take the hard way.
-    if (( mathjax_index <= ${#} )) {
+    if (( ${+dirname_src_mathjax} )) {
         local mathjax_preamble mathjax_config mathjax_style
         print_message 'Reconfiguring MathJax.'
 
@@ -883,6 +890,55 @@ zmodload zsh/mapfile
 
     # Reenable default character indexing.
     setopt multibyte
+}
+
+# Inform the current user of such process.
+print_message "Post-processing \"${dirname_trg}\"."
+
+# List of all output HTML files, always containing at least the main such file.
+typeset -a filenames_trg_html
+filenames_trg_html=( "${filename_trg_html_main}" )
+
+# If option "--splitpart" was passed, add all additional HTML files eLyXer
+# produced to such list. Fortunately, such files match a simple pattern of the
+# basename of the passed main output HTML file suffixed by "-", one or more
+# characters (the name of the split part), and ".html".
+if (( ${@[(ie)--splitpart]} <= ${#} )) {
+    # Add all such files. Dismantled, this is:
+    #
+    # * ":r", strip the filetype from such filename.
+    # * "?*", matching at least one character.
+    filenames_trg_html+=( "${filename_trg_html_main:r}-"?*'.html' )
+
+    # If no such files exist, print a warning. While this doesn't necessarily
+    # indicate a fatal error (e.g., in the event no parts exist), it does
+    # suggest the likelihood of one.
+    if (( ${#filenames_trg_html} == 1 )) {
+        print_warning\
+            'Option "--splitpart" passed, but no files matching "'${filename_trg_html_main}'" found.'
+    }
+#FIXME: Actually, only do such if the size of the input LyX file exceeds a
+#certain threshold (e.g., 100Kb).
+# Else, recommend the user pass such option.
+} else {
+    print_warning\
+        'Outputting all HTML to "'${filename_trg_html_main}'".
+Consider passing "--splitpart 1" to output one HTML file per input chapter.'
+}
+
+# Post-process all output HTML files.
+#
+# Load zsh module "zsh/mapfile", providing both read and write access to text
+# file contents by map global ${mapfile}, only for the exact duration of such
+# access. Since unsetting map entries permanently, silently deletes the
+# corresponding files, such module is inherently unsafe and should only be
+# loaded as long as required.
+zmodload zsh/mapfile
+{
+    local filename_trg_html
+    for   filename_trg_html ("${filenames_trg_html[@]}") {
+        process_file_trg_html "${filename_trg_html}"
+    }
 # For safety, unload "zsh/mapfile" even in the event of exceptions.
 } always {
     zmodload -ui zsh/mapfile
@@ -893,11 +949,8 @@ zmodload zsh/mapfile
 if (( ${+elicker_options[--clean]} )) {
     print_message "Cleaning temporary paths."
 
-    # Remove the elicker-specific temporary HTML file.
-    rm -f -- "${filename_trg_html_old}"
-
     # Remove the eLyXer-specific temporary LyX file.
-    rm -f -- "${filename_trg_html/.html(#e)/.lyx}"
+    rm -f -- "${filename_trg_html_main/.html(#e)/.lyx}"
 
     # Remove all LyX-specific temporary files. Dismantled, this is:
     #
@@ -910,6 +963,22 @@ if (( ${+elicker_options[--clean]} )) {
 print_message "Post-processed \"${dirname_trg}\"."
 
 # --------------------( WASTELANDS                         )--------------------
+    # (( ${+dirname_src_mathjax} + ${+dirname_trg_mathjax} == 2 )) || die\
+    #     'Strings ${dirname_src_mathjax} and/or ${dirname_trg_mathjax} not set.'
+
+    # Remove the elicker-specific temporary HTML file.
+    # rm -f -- "${filename_trg_html_main_old}"
+
+# Copy such temporary target file to the target file LyX expects.
+#cp -v -- "${filename_trg_html_main_old}" "${filename_trg_html_main}"
+
+# Insist eLyXer output to an intermediate target file rather than the passed
+# target file that LyX expects. While we could permit eLyXer to instead output
+# to the latter, preserving eLyXer's preprocessed output can be helpful for
+# archival and debugging purposes.
+#filename_trg_html_main_old="${filename_trg_html_main%.html}_old.html"
+
+    # * ":t", reducing such filename to its basename.
 #FUXME: Minify locally copied CSS files. (Not required for MathJax, of course.)
 #FUXME: eLyXer appears to suffer a bug: figures with "%20" in filenames are
 #silently broken. While we never noticed this before, it's certainly apparent
@@ -1283,7 +1352,7 @@ print_message "Post-processed \"${dirname_trg}\"."
     #FUXME: If this is *STILL* too slow, resort to in-place "sed". *shrug*
 
 #   argv=( "${argv[1,quality_index-1]}" "${argv[quality_index+1,-1]}" )
-#   mapfile[${filename_trg_html}]="${mapfile[${filename_trg_html}]//\<a[^>]#\>↓\</a\>}"
+#   mapfile[${filename_trg_html_main}]="${mapfile[${filename_trg_html_main}]//\<a[^>]#\>↓\</a\>}"
     # across multiple lines. Instead, leverage the text file expansion
     # facilities of zsh module "zsh/mapfile" along with the multiline-matching
     # PCRE facilities of zsh module "zsh/pcre" to do so. Since "zsh/mapfile" is
@@ -1296,7 +1365,7 @@ print_message "Post-processed \"${dirname_trg}\"."
 
 #command sed -ie\
     #'s~\(</script>\)~\1<style>.MathJax_Preview { color: black !important}</style>~'\
-    #"${filename_trg_html}"
+    #"${filename_trg_html_main}"
 # Directory containing the original source LyX file.
 #dirname_src="${filename_src_lyx_old:h}"
 
